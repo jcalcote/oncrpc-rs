@@ -14,4 +14,3 @@ description = "Owned ONC RPC wire types, auth envelopes, and record-marking prim
 [dependencies]
 bytes.workspace = true
 thiserror.workspace = true
-onc-rpc-auth = { path = "../onc-rpc-auth" }
