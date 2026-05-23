@@ -13,9 +13,8 @@ description = "TCP runtime primitives for ONC RPC clients."
 
 [dependencies]
 bytes.workspace = true
-onc-rpc.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 onc-rpc-auth = { path = "../onc-rpc-auth" }
-
+onc-rpc-wire = { path = "../onc-rpc-wire" }

@@ -90,7 +90,11 @@ impl Server {
         &self.config
     }
 
-    pub fn register<D: Dispatch>(&mut self, _program: Program, _dispatch: D) -> Result<(), ServerError> {
+    pub fn register<D: Dispatch>(
+        &mut self,
+        _program: Program,
+        _dispatch: D,
+    ) -> Result<(), ServerError> {
         Err(ServerError::RegistrationNotImplemented)
     }
 }
@@ -100,4 +104,3 @@ impl Default for ServerBuilder {
         Self::new()
     }
 }
-

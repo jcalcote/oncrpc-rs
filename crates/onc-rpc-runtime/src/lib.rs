@@ -1,6 +1,7 @@
 //! Runtime primitives for ONC RPC over TCP.
 
 use onc_rpc_auth::AuthFlavor;
+use onc_rpc_wire::RecordMarker;
 use std::net::SocketAddr;
 use std::time::Duration;
 use thiserror::Error;
@@ -33,6 +34,7 @@ pub struct Xid(pub u32);
 pub struct Reply {
     pub xid: Xid,
     pub payload: Vec<u8>,
+    pub marker: RecordMarker,
 }
 
 #[derive(Debug, Error)]
@@ -56,4 +58,3 @@ impl Client {
         &self.config
     }
 }
-

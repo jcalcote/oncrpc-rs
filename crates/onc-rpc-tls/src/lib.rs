@@ -15,4 +15,3 @@ pub enum TlsError {
     #[error("starttls support is not implemented yet")]
     StartTlsNotImplemented,
 }
-

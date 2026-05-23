@@ -5,6 +5,7 @@ members = [
     "crates/onc-rpc-runtime",
     "crates/onc-rpc-server",
     "crates/onc-rpc-tls",
+    "crates/onc-rpc-wire",
     "crates/onc-rpcgen",
 ]
 resolver = "2"
@@ -23,7 +24,6 @@ categories = ["network-programming"]
 
 [workspace.dependencies]
 bytes = "1.11"
-onc-rpc = "0.3.3"
 thiserror = "2.0"
 tokio = { version = "1.48", features = ["io-util", "macros", "net", "rt", "sync", "time"] }
 tracing = "0.1"

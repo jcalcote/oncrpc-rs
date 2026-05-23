@@ -7,7 +7,7 @@ Keep contributions aligned with the repository's current priorities:
 - ONC RPC TCP client/runtime support
 - ONC RPC TCP server/runtime support
 - `AUTH_NONE` and `AUTH_SYS`
-- code generation from `.x` definitions
+- full `.x`-driven generation of XDR types and ONC RPC client/server stubs
 - optional STARTTLS support needed by real consumers
 
 Avoid broad feature work that is not tied to an active consumer without opening an issue first.
@@ -27,4 +27,3 @@ cargo check --workspace
 - Keep changes narrowly scoped.
 - Prefer adding tests with behavior changes.
 - Document any wire-format or API compatibility decisions in the PR description.
-

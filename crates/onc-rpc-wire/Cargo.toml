@@ -1,5 +1,5 @@
 [package]
-name = "onc-rpcgen"
+name = "onc-rpc-wire"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,7 +9,9 @@ rust-version.workspace = true
 authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Core code generation for XDR types and ONC RPC client/server stubs."
+description = "Owned ONC RPC wire types, auth envelopes, and record-marking primitives."
 
 [dependencies]
+bytes.workspace = true
 thiserror.workspace = true
+onc-rpc-auth = { path = "../onc-rpc-auth" }
