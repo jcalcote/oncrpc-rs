@@ -1,15 +1,15 @@
 const OCTAL_BOUND = 010;
 
-typedef float pdx_ratio_t;
-typedef double pdx_measure_t;
-typedef quadruple pdx_wide_t;
+typedef float ratio_t;
+typedef double measure_t;
+typedef quadruple wide_t;
 
-struct pdx_full_t {
+struct full_record_t {
     opaque fixed[OCTAL_BOUND];
-    pdx_ratio_t *next;
+    ratio_t *next;
 };
 
-union pdx_payload_t switch (int kind) {
+union payload_t switch (int kind) {
     case 1:
         int single;
     case 2:
@@ -22,4 +22,4 @@ union pdx_payload_t switch (int kind) {
 typedef enum {
     VALUE_ONE = 1,
     VALUE_TWO = 2
-} pdx_inline_enum_t;
+} inline_enum_t;

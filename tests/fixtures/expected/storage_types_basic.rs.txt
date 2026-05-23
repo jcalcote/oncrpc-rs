@@ -1,0 +1,25 @@
+use bytes::Bytes;
+
+pub const HANDLE_SIZE: i64 = 64;
+
+pub type trace_id_t = u64;
+
+pub type file_handle_t = Bytes;
+
+pub type path_t = String;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct timestamp_t {
+    pub seconds: u32,
+    pub nseconds: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(i32)]
+pub enum status_t {
+    STATUS_OK = 0,
+    STATUS_NOENT = 2,
+    STATUS_STALE = 116,
+    STATUS_FAILED = 1001,
+}
+

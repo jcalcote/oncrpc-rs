@@ -1,0 +1,17 @@
+const HANDLE_SIZE = 64;
+
+typedef unsigned hyper trace_id_t;
+typedef opaque file_handle_t<HANDLE_SIZE>;
+typedef string path_t<>;
+
+struct timestamp_t {
+    unsigned int seconds;
+    unsigned int nseconds;
+};
+
+enum status_t {
+    STATUS_OK = 0,
+    STATUS_NOENT = 2,
+    STATUS_STALE = 116,
+    STATUS_FAILED = 1001
+};

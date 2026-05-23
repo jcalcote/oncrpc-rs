@@ -12,6 +12,9 @@
 This document narrows the operational contract for generator work so future
 changes stay aligned.
 
+The intended `oncrpcgen` command-line surface and generated sync/async API
+shape are specified in [cli-spec.md](cli-spec.md).
+
 ## Source of Truth
 
 - `.x` files are the source of truth.

@@ -16,12 +16,12 @@ fn emitted_fixture(path: &str) -> String {
 #[test]
 fn emission_snapshot_matches_expected_output_for_real_fixtures() {
     assert_snapshot(
-        "xdr/real/pd_types_basic.x",
-        "expected/pd_types_basic.rs.txt",
+        "xdr/real/storage_types_basic.x",
+        "expected/storage_types_basic.rs.txt",
     );
     assert_snapshot(
-        "xdr/real/pdcm_program_basic.x",
-        "expected/pdcm_program_basic.rs.txt",
+        "xdr/real/blob_service_basic.x",
+        "expected/blob_service_basic.rs.txt",
     );
     assert_snapshot(
         "xdr/synthetic/rfc4506_parser_features.x",
@@ -31,54 +31,54 @@ fn emission_snapshot_matches_expected_output_for_real_fixtures() {
 
 #[test]
 fn emission_maps_real_subset_to_expected_rust_shapes() {
-    let emitted = emitted_fixture("xdr/real/pd_types_basic.x");
+    let emitted = emitted_fixture("xdr/real/storage_types_basic.x");
 
     assert!(emitted.contains("use bytes::Bytes;"));
-    assert!(emitted.contains("pub const FILE_HANDLE_LEN: i64 = 64;"));
-    assert!(emitted.contains("pub type pdx_trc_id_t = u64;"));
-    assert!(emitted.contains("pub type pdx_file_handle_t = Bytes;"));
-    assert!(emitted.contains("pub type pdx_path_t = String;"));
-    assert!(emitted.contains("pub struct pdx_time_t {"));
+    assert!(emitted.contains("pub const HANDLE_SIZE: i64 = 64;"));
+    assert!(emitted.contains("pub type trace_id_t = u64;"));
+    assert!(emitted.contains("pub type file_handle_t = Bytes;"));
+    assert!(emitted.contains("pub type path_t = String;"));
+    assert!(emitted.contains("pub struct timestamp_t {"));
     assert!(emitted.contains("pub seconds: u32,"));
     assert!(emitted.contains("#[repr(i32)]"));
-    assert!(emitted.contains("pub enum pdx_status_t {"));
+    assert!(emitted.contains("pub enum status_t {"));
 }
 
 #[test]
 fn emission_is_deterministic_for_same_schema() {
-    let first = emitted_fixture("xdr/real/pdcm_program_basic.x");
-    let second = emitted_fixture("xdr/real/pdcm_program_basic.x");
+    let first = emitted_fixture("xdr/real/blob_service_basic.x");
+    let second = emitted_fixture("xdr/real/blob_service_basic.x");
 
     assert_eq!(first, second);
 }
 
 #[test]
 fn emission_includes_program_version_and_procedure_constants() {
-    let emitted = emitted_fixture("xdr/real/pdcm_program_basic.x");
+    let emitted = emitted_fixture("xdr/real/blob_service_basic.x");
 
-    assert!(emitted.contains("pub mod pdcm_program {"));
-    assert!(emitted.contains("pub const PROGRAM: u32 = 100666;"));
-    assert!(emitted.contains("pub mod pdcm_rpc_v8 {"));
-    assert!(emitted.contains("pub const VERSION: u32 = 8;"));
-    assert!(emitted.contains("pub const PDCM_NULL: u32 = 0;"));
-    assert!(emitted.contains("pub const PDCM_DO_COPY: u32 = 1;"));
+    assert!(emitted.contains("pub mod blob_service {"));
+    assert!(emitted.contains("pub const PROGRAM: u32 = 200001;"));
+    assert!(emitted.contains("pub mod blob_service_v1 {"));
+    assert!(emitted.contains("pub const VERSION: u32 = 1;"));
+    assert!(emitted.contains("pub const BLOB_NULL: u32 = 0;"));
+    assert!(emitted.contains("pub const BLOB_COPY: u32 = 1;"));
 }
 
 #[test]
 fn emission_covers_remaining_rfc4506_constructs() {
     let emitted = emitted_fixture("xdr/synthetic/rfc4506_parser_features.x");
 
-    assert!(emitted.contains("pub type pdx_ratio_t = f32;"));
-    assert!(emitted.contains("pub type pdx_measure_t = f64;"));
-    assert!(emitted.contains("pub type pdx_wide_t = [u8; 16];"));
+    assert!(emitted.contains("pub type ratio_t = f32;"));
+    assert!(emitted.contains("pub type measure_t = f64;"));
+    assert!(emitted.contains("pub type wide_t = [u8; 16];"));
     assert!(emitted.contains("pub fixed: [u8; OCTAL_BOUND as usize],"));
-    assert!(emitted.contains("pub next: Option<Box<pdx_ratio_t>>,"));
-    assert!(emitted.contains("pub enum pdx_payload_t {"));
+    assert!(emitted.contains("pub next: Option<Box<ratio_t>>,"));
+    assert!(emitted.contains("pub enum payload_t {"));
     assert!(emitted.contains("Case1 {"));
     assert!(emitted.contains("Case2 {"));
     assert!(emitted.contains("Case3 {"));
     assert!(emitted.contains("Default,"));
-    assert!(emitted.contains("pub enum pdx_inline_enum_t {"));
+    assert!(emitted.contains("pub enum inline_enum_t {"));
 }
 
 fn assert_snapshot(fixture_path: &str, expected_path: &str) {

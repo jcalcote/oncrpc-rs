@@ -25,10 +25,10 @@ fn fixture_layout_exists() {
 }
 
 #[test]
-fn parses_real_pd_types_subset_fixture() {
-    let schema = read_schema("xdr/real/pd_types_basic.x");
+fn parses_real_storage_types_subset_fixture() {
+    let schema = read_schema("xdr/real/storage_types_basic.x");
 
-    assert!(matches!(&schema.items[0], Item::Const(item) if item.name == "FILE_HANDLE_LEN"));
+    assert!(matches!(&schema.items[0], Item::Const(item) if item.name == "HANDLE_SIZE"));
     assert!(
         matches!(&schema.items[1], Item::Typedef(item) if item.target == TypeSpec::UnsignedHyper)
     );
@@ -38,11 +38,11 @@ fn parses_real_pd_types_subset_fixture() {
             if item.target == TypeSpec::Opaque
                 && item.declarator.modifier
                     == Some(DeclaratorModifier::VariableArray(Some(ValueExpr::Identifier(
-                        "FILE_HANDLE_LEN".to_string()
+                        "HANDLE_SIZE".to_string()
                     ))))
     ));
-    assert!(matches!(&schema.items[4], Item::Struct(item) if item.name == "pdx_time_t"));
-    assert!(matches!(&schema.items[5], Item::Enum(item) if item.name == "pdx_status_t"));
+    assert!(matches!(&schema.items[4], Item::Struct(item) if item.name == "timestamp_t"));
+    assert!(matches!(&schema.items[5], Item::Enum(item) if item.name == "status_t"));
 
     let Item::Struct(struct_decl) = &schema.items[4] else {
         panic!("expected struct item");
@@ -52,21 +52,21 @@ fn parses_real_pd_types_subset_fixture() {
 }
 
 #[test]
-fn parses_real_pdcm_program_subset_fixture() {
-    let schema = read_schema("xdr/real/pdcm_program_basic.x");
+fn parses_real_blob_service_subset_fixture() {
+    let schema = read_schema("xdr/real/blob_service_basic.x");
 
-    assert!(matches!(&schema.items[0], Item::Struct(item) if item.name == "pdcm_copy_arg_t"));
-    assert!(matches!(&schema.items[1], Item::Program(item) if item.name == "PDCM_PROGRAM"));
+    assert!(matches!(&schema.items[0], Item::Struct(item) if item.name == "copy_request_t"));
+    assert!(matches!(&schema.items[1], Item::Program(item) if item.name == "BLOB_SERVICE"));
 
     let Item::Program(program) = &schema.items[1] else {
         panic!("expected program item");
     };
 
-    assert_eq!(program.number, 100666);
+    assert_eq!(program.number, 200001);
     assert_eq!(program.versions.len(), 1);
-    assert_eq!(program.versions[0].name, "PDCM_RPC_V8");
+    assert_eq!(program.versions[0].name, "BLOB_SERVICE_V1");
     assert_eq!(program.versions[0].procedures.len(), 2);
-    assert_eq!(program.versions[0].procedures[0].name, "PDCM_NULL");
+    assert_eq!(program.versions[0].procedures[0].name, "BLOB_NULL");
     assert_eq!(
         program.versions[0].procedures[0].argument_type,
         TypeSpec::Void
@@ -76,12 +76,12 @@ fn parses_real_pdcm_program_subset_fixture() {
 #[test]
 fn parser_snapshot_matches_expected_output_for_real_fixtures() {
     assert_snapshot(
-        "xdr/real/pd_types_basic.x",
-        "expected/pd_types_basic.ast.txt",
+        "xdr/real/storage_types_basic.x",
+        "expected/storage_types_basic.ast.txt",
     );
     assert_snapshot(
-        "xdr/real/pdcm_program_basic.x",
-        "expected/pdcm_program_basic.ast.txt",
+        "xdr/real/blob_service_basic.x",
+        "expected/blob_service_basic.ast.txt",
     );
     assert_snapshot(
         "xdr/synthetic/rfc4506_parser_features.x",
@@ -155,7 +155,7 @@ typedef union switch (int kind) { case 1: int value; default: void nothing; } pa
 
 #[test]
 fn parser_ignores_percent_include_lines() {
-    let source = "%#include \"pd/pd_types.h\"\nconst VALUE = 1;\n";
+    let source = "%#include \"storage/common_types.h\"\nconst VALUE = 1;\n";
     let schema = parse_x_source(source).expect("include line should be ignored");
 
     assert_eq!(schema.items.len(), 1);
