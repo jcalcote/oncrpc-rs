@@ -23,6 +23,10 @@ fn emission_snapshot_matches_expected_output_for_real_fixtures() {
         "xdr/real/pdcm_program_basic.x",
         "expected/pdcm_program_basic.rs.txt",
     );
+    assert_snapshot(
+        "xdr/synthetic/rfc4506_parser_features.x",
+        "expected/rfc4506_parser_features.rs.txt",
+    );
 }
 
 #[test]
@@ -58,6 +62,23 @@ fn emission_includes_program_version_and_procedure_constants() {
     assert!(emitted.contains("pub const VERSION: u32 = 8;"));
     assert!(emitted.contains("pub const PDCM_NULL: u32 = 0;"));
     assert!(emitted.contains("pub const PDCM_DO_COPY: u32 = 1;"));
+}
+
+#[test]
+fn emission_covers_remaining_rfc4506_constructs() {
+    let emitted = emitted_fixture("xdr/synthetic/rfc4506_parser_features.x");
+
+    assert!(emitted.contains("pub type pdx_ratio_t = f32;"));
+    assert!(emitted.contains("pub type pdx_measure_t = f64;"));
+    assert!(emitted.contains("pub type pdx_wide_t = [u8; 16];"));
+    assert!(emitted.contains("pub fixed: [u8; OCTAL_BOUND as usize],"));
+    assert!(emitted.contains("pub next: Option<Box<pdx_ratio_t>>,"));
+    assert!(emitted.contains("pub enum pdx_payload_t {"));
+    assert!(emitted.contains("Case1 {"));
+    assert!(emitted.contains("Case2 {"));
+    assert!(emitted.contains("Case3 {"));
+    assert!(emitted.contains("Default,"));
+    assert!(emitted.contains("pub enum pdx_inline_enum_t {"));
 }
 
 fn assert_snapshot(fixture_path: &str, expected_path: &str) {

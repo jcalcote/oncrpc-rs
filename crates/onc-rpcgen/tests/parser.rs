@@ -1,5 +1,5 @@
 use onc_rpcgen::{
-    DeclaratorModifier, GeneratorError, Item, Schema, TypeSpec, ValueExpr, fixture_root,
+    DeclaratorModifier, Item, Schema, TypeSpec, UnionCaseLabel, ValueExpr, fixture_root,
     parse_x_file, parse_x_source,
 };
 use std::fs;
@@ -43,6 +43,12 @@ fn parses_real_pd_types_subset_fixture() {
     ));
     assert!(matches!(&schema.items[4], Item::Struct(item) if item.name == "pdx_time_t"));
     assert!(matches!(&schema.items[5], Item::Enum(item) if item.name == "pdx_status_t"));
+
+    let Item::Struct(struct_decl) = &schema.items[4] else {
+        panic!("expected struct item");
+    };
+    assert_eq!(struct_decl.body.declarations.len(), 2);
+    assert_eq!(struct_decl.body.declarations[0].declarator.name, "seconds");
 }
 
 #[test]
@@ -77,18 +83,73 @@ fn parser_snapshot_matches_expected_output_for_real_fixtures() {
         "xdr/real/pdcm_program_basic.x",
         "expected/pdcm_program_basic.ast.txt",
     );
+    assert_snapshot(
+        "xdr/synthetic/rfc4506_parser_features.x",
+        "expected/rfc4506_parser_features.ast.txt",
+    );
 }
 
 #[test]
-fn parser_rejects_unsupported_union_constructs() {
-    let error = parse_x_file(fixture("xdr/synthetic/unsupported_union.x"))
-        .expect_err("union support should fail closed");
+fn parser_supports_remaining_rfc4506_constructs() {
+    let schema = read_schema("xdr/synthetic/rfc4506_parser_features.x");
 
+    assert!(matches!(&schema.items[0], Item::Const(item) if item.name == "OCTAL_BOUND"));
+    assert!(matches!(&schema.items[1], Item::Typedef(item) if item.target == TypeSpec::Float));
+    assert!(matches!(&schema.items[2], Item::Typedef(item) if item.target == TypeSpec::Double));
+    assert!(matches!(
+        &schema.items[3],
+        Item::Typedef(item) if item.target == TypeSpec::Quadruple
+    ));
+
+    let Item::Struct(struct_decl) = &schema.items[4] else {
+        panic!("expected struct item");
+    };
     assert_eq!(
-        error,
-        GeneratorError::UnsupportedConstruct(
-            "union declarations are not supported yet".to_string()
-        )
+        struct_decl.body.declarations[0].declarator.modifier,
+        Some(DeclaratorModifier::FixedArray(ValueExpr::Identifier(
+            "OCTAL_BOUND".to_string()
+        )))
+    );
+    assert_eq!(
+        struct_decl.body.declarations[1].declarator.modifier,
+        Some(DeclaratorModifier::Optional)
+    );
+
+    let Item::Union(union_decl) = &schema.items[5] else {
+        panic!("expected union item");
+    };
+    assert_eq!(union_decl.body.arms.len(), 3);
+    assert!(matches!(
+        union_decl.body.arms[1].labels.as_slice(),
+        [
+            UnionCaseLabel::Case(ValueExpr::Number(2)),
+            UnionCaseLabel::Case(ValueExpr::Number(3))
+        ]
+    ));
+    assert!(matches!(
+        union_decl.body.arms[2].labels.as_slice(),
+        [UnionCaseLabel::Default]
+    ));
+
+    let Item::Typedef(typedef_decl) = &schema.items[6] else {
+        panic!("expected typedef item");
+    };
+    assert!(matches!(typedef_decl.target, TypeSpec::Enum(_)));
+}
+
+#[test]
+fn parser_supports_inline_type_specifiers_in_source() {
+    let source = "\
+typedef struct { unsigned int x; unsigned int y; } point_t;\n\
+typedef union switch (int kind) { case 1: int value; default: void nothing; } payload_t;\n";
+    let schema = parse_x_source(source).expect("inline type specifiers should parse");
+
+    assert_eq!(schema.items.len(), 2);
+    assert!(
+        matches!(&schema.items[0], Item::Typedef(item) if matches!(item.target, TypeSpec::Struct(_)))
+    );
+    assert!(
+        matches!(&schema.items[1], Item::Typedef(item) if matches!(item.target, TypeSpec::Union(_)))
     );
 }
 

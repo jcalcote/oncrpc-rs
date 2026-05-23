@@ -1,0 +1,35 @@
+pub const OCTAL_BOUND: i64 = 8;
+
+pub type pdx_ratio_t = f32;
+
+pub type pdx_measure_t = f64;
+
+pub type pdx_wide_t = [u8; 16];
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct pdx_full_t {
+    pub fixed: [u8; OCTAL_BOUND as usize],
+    pub next: Option<Box<pdx_ratio_t>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum pdx_payload_t {
+    Case1 {
+        single: i32,
+    },
+    Case2 {
+        text: String,
+    },
+    Case3 {
+        text: String,
+    },
+    Default,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(i32)]
+pub enum pdx_inline_enum_t {
+    VALUE_ONE = 1,
+    VALUE_TWO = 2,
+}
+

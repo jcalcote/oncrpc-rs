@@ -1,20 +1,13 @@
 use crate::GeneratorError;
 use crate::ast::*;
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::fmt::Write;
 
 pub fn emit_rust_types(schema: &Schema) -> Result<String, GeneratorError> {
-    let uses_bytes = schema_uses_bytes(schema);
-    let mut out = String::new();
-
-    if uses_bytes {
-        out.push_str("use bytes::Bytes;\n\n");
-    }
-
-    for item in &schema.items {
-        emit_item(item, 0, &mut out)?;
-    }
-
-    Ok(out)
+    let mut emitter = TypeEmitter::new(schema);
+    emitter.emit_schema(schema)?;
+    Ok(emitter.out)
 }
 
 pub fn emit_rust_stubs(schema: &Schema) -> Result<String, GeneratorError> {
@@ -39,121 +32,460 @@ pub fn emit_rust_stubs(schema: &Schema) -> Result<String, GeneratorError> {
     Ok(out)
 }
 
-fn emit_item(item: &Item, indent: usize, out: &mut String) -> Result<(), GeneratorError> {
-    match item {
-        Item::Const(item) => emit_const(item, indent, out),
-        Item::Typedef(item) => emit_typedef(item, indent, out),
-        Item::Struct(item) => emit_struct(item, indent, out),
-        Item::Enum(item) => emit_enum(item, indent, out),
-        Item::Program(item) => emit_program(item, indent, out),
-    }
+struct TypeEmitter {
+    out: String,
+    emitted_helpers: BTreeSet<String>,
+    named_types: BTreeMap<String, NamedType>,
 }
 
-fn emit_const(item: &ConstDecl, indent: usize, out: &mut String) -> Result<(), GeneratorError> {
-    line(
-        indent,
-        out,
-        format_args!(
-            "pub const {}: i64 = {};",
-            item.name,
-            render_value(&item.value)
-        ),
-    );
-    out.push('\n');
-    Ok(())
+#[derive(Clone)]
+enum NamedType {
+    Typedef {
+        target: TypeSpec,
+        modifier: Option<DeclaratorModifier>,
+    },
+    Struct(StructBody),
+    Enum,
+    Union(UnionBody),
 }
 
-fn emit_typedef(item: &TypedefDecl, indent: usize, out: &mut String) -> Result<(), GeneratorError> {
-    let rust_type = rust_type_for_declaration(&item.target, &item.declarator)?;
-    line(
-        indent,
-        out,
-        format_args!("pub type {} = {};", item.declarator.name, rust_type),
-    );
-    out.push('\n');
-    Ok(())
-}
-
-fn emit_struct(item: &StructDecl, indent: usize, out: &mut String) -> Result<(), GeneratorError> {
-    line(
-        indent,
-        out,
-        format_args!("#[derive(Debug, Clone, PartialEq, Eq)]"),
-    );
-    line(indent, out, format_args!("pub struct {} {{", item.name));
-
-    for field in &item.fields {
-        let rust_type = rust_type_for_declaration(&field.field_type, &field.declarator)?;
-        line(
-            indent + 4,
+impl TypeEmitter {
+    fn new(schema: &Schema) -> Self {
+        let mut out = String::new();
+        if schema_uses_bytes(schema) {
+            out.push_str("use bytes::Bytes;\n\n");
+        }
+        Self {
             out,
-            format_args!("pub {}: {},", field.declarator.name, rust_type),
-        );
+            emitted_helpers: BTreeSet::new(),
+            named_types: build_named_types(schema),
+        }
     }
 
-    line(indent, out, format_args!("}}"));
-    out.push('\n');
-    Ok(())
-}
-
-fn emit_enum(item: &EnumDecl, indent: usize, out: &mut String) -> Result<(), GeneratorError> {
-    line(
-        indent,
-        out,
-        format_args!("#[derive(Debug, Clone, Copy, PartialEq, Eq)]"),
-    );
-    line(indent, out, format_args!("#[repr(i32)]"));
-    line(indent, out, format_args!("pub enum {} {{", item.name));
-
-    for variant in &item.variants {
-        line(
-            indent + 4,
-            out,
-            format_args!("{} = {},", variant.name, render_value(&variant.value)),
-        );
+    fn emit_schema(&mut self, schema: &Schema) -> Result<(), GeneratorError> {
+        for item in &schema.items {
+            self.emit_item(item, 0)?;
+        }
+        Ok(())
     }
 
-    line(indent, out, format_args!("}}"));
-    out.push('\n');
-    Ok(())
-}
+    fn emit_item(&mut self, item: &Item, indent: usize) -> Result<(), GeneratorError> {
+        match item {
+            Item::Const(item) => self.emit_const(item, indent),
+            Item::Typedef(item) => self.emit_typedef(item, indent),
+            Item::Struct(item) => self.emit_named_struct(&item.name, &item.body, indent),
+            Item::Enum(item) => self.emit_named_enum(&item.name, &item.body, indent),
+            Item::Union(item) => self.emit_named_union(&item.name, &item.body, indent),
+            Item::Program(item) => self.emit_program(item, indent),
+        }
+    }
 
-fn emit_program(item: &ProgramDecl, indent: usize, out: &mut String) -> Result<(), GeneratorError> {
-    let module_name = to_snake_case(&item.name);
-    line(indent, out, format_args!("pub mod {} {{", module_name));
-    line(
-        indent + 4,
-        out,
-        format_args!("pub const PROGRAM: u32 = {};", item.number),
-    );
-    out.push('\n');
-
-    for version in &item.versions {
-        let version_module = to_snake_case(&version.name);
+    fn emit_const(&mut self, item: &ConstDecl, indent: usize) -> Result<(), GeneratorError> {
         line(
-            indent + 4,
-            out,
-            format_args!("pub mod {} {{", version_module),
+            indent,
+            &mut self.out,
+            format_args!(
+                "pub const {}: i64 = {};",
+                item.name,
+                render_value(&item.value)
+            ),
+        );
+        self.out.push('\n');
+        Ok(())
+    }
+
+    fn emit_typedef(&mut self, item: &TypedefDecl, indent: usize) -> Result<(), GeneratorError> {
+        match &item.target {
+            TypeSpec::Enum(body) if item.declarator.modifier.is_none() => {
+                self.emit_named_enum(&item.declarator.name, body, indent)
+            }
+            TypeSpec::Struct(body) if item.declarator.modifier.is_none() => {
+                self.emit_named_struct(&item.declarator.name, body, indent)
+            }
+            TypeSpec::Union(body) if item.declarator.modifier.is_none() => {
+                self.emit_named_union(&item.declarator.name, body, indent)
+            }
+            TypeSpec::Enum(body) => {
+                let helper_name = format!("{}_value", item.declarator.name);
+                self.emit_named_enum(&helper_name, body, indent)?;
+                let rust_type = self.rust_type_for_declaration(
+                    &TypeSpec::Identifier(helper_name),
+                    &item.declarator,
+                    &item.declarator.name,
+                    indent,
+                )?;
+                line(
+                    indent,
+                    &mut self.out,
+                    format_args!("pub type {} = {};", item.declarator.name, rust_type),
+                );
+                self.out.push('\n');
+                Ok(())
+            }
+            TypeSpec::Struct(body) => {
+                let helper_name = format!("{}_value", item.declarator.name);
+                self.emit_named_struct(&helper_name, body, indent)?;
+                let rust_type = self.rust_type_for_declaration(
+                    &TypeSpec::Identifier(helper_name),
+                    &item.declarator,
+                    &item.declarator.name,
+                    indent,
+                )?;
+                line(
+                    indent,
+                    &mut self.out,
+                    format_args!("pub type {} = {};", item.declarator.name, rust_type),
+                );
+                self.out.push('\n');
+                Ok(())
+            }
+            TypeSpec::Union(body) => {
+                let helper_name = format!("{}_value", item.declarator.name);
+                self.emit_named_union(&helper_name, body, indent)?;
+                let rust_type = self.rust_type_for_declaration(
+                    &TypeSpec::Identifier(helper_name),
+                    &item.declarator,
+                    &item.declarator.name,
+                    indent,
+                )?;
+                line(
+                    indent,
+                    &mut self.out,
+                    format_args!("pub type {} = {};", item.declarator.name, rust_type),
+                );
+                self.out.push('\n');
+                Ok(())
+            }
+            _ => {
+                let rust_type = self.rust_type_for_declaration(
+                    &item.target,
+                    &item.declarator,
+                    &item.declarator.name,
+                    indent,
+                )?;
+                line(
+                    indent,
+                    &mut self.out,
+                    format_args!("pub type {} = {};", item.declarator.name, rust_type),
+                );
+                self.out.push('\n');
+                Ok(())
+            }
+        }
+    }
+
+    fn emit_named_struct(
+        &mut self,
+        name: &str,
+        body: &StructBody,
+        indent: usize,
+    ) -> Result<(), GeneratorError> {
+        if !self.emitted_helpers.insert(name.to_string()) {
+            return Ok(());
+        }
+
+        for declaration in &body.declarations {
+            let hint = format!("{}_{}", name, declaration.declarator.name);
+            self.emit_inline_helper_types(&declaration.type_spec, &hint, indent)?;
+        }
+
+        emit_derive_block(
+            indent,
+            self.struct_is_eq(body),
+            &mut self.out,
+            DeriveKind::Struct,
         );
         line(
-            indent + 8,
-            out,
-            format_args!("pub const VERSION: u32 = {};", version.number),
+            indent,
+            &mut self.out,
+            format_args!("pub struct {} {{", name),
         );
-        for procedure in &version.procedures {
+        for declaration in &body.declarations {
+            let hint = format!("{}_{}", name, declaration.declarator.name);
+            let rust_type = self.rust_type_for_declaration(
+                &declaration.type_spec,
+                &declaration.declarator,
+                &hint,
+                indent,
+            )?;
             line(
-                indent + 8,
-                out,
-                format_args!("pub const {}: u32 = {};", procedure.name, procedure.number),
+                indent + 4,
+                &mut self.out,
+                format_args!("pub {}: {},", declaration.declarator.name, rust_type),
             );
         }
-        line(indent + 4, out, format_args!("}}"));
-        out.push('\n');
+        line(indent, &mut self.out, format_args!("}}"));
+        self.out.push('\n');
+        Ok(())
     }
 
-    line(indent, out, format_args!("}}"));
-    out.push('\n');
-    Ok(())
+    fn emit_named_enum(
+        &mut self,
+        name: &str,
+        body: &EnumBody,
+        indent: usize,
+    ) -> Result<(), GeneratorError> {
+        if !self.emitted_helpers.insert(name.to_string()) {
+            return Ok(());
+        }
+
+        line(
+            indent,
+            &mut self.out,
+            format_args!("#[derive(Debug, Clone, Copy, PartialEq, Eq)]"),
+        );
+        line(indent, &mut self.out, format_args!("#[repr(i32)]"));
+        line(indent, &mut self.out, format_args!("pub enum {} {{", name));
+        for variant in &body.variants {
+            line(
+                indent + 4,
+                &mut self.out,
+                format_args!("{} = {},", variant.name, render_value(&variant.value)),
+            );
+        }
+        line(indent, &mut self.out, format_args!("}}"));
+        self.out.push('\n');
+        Ok(())
+    }
+
+    fn emit_named_union(
+        &mut self,
+        name: &str,
+        body: &UnionBody,
+        indent: usize,
+    ) -> Result<(), GeneratorError> {
+        if !self.emitted_helpers.insert(name.to_string()) {
+            return Ok(());
+        }
+
+        for arm in &body.arms {
+            let hint = format!("{}_{}", name, arm.declaration.declarator.name);
+            self.emit_inline_helper_types(&arm.declaration.type_spec, &hint, indent)?;
+        }
+
+        emit_derive_block(
+            indent,
+            self.union_is_eq(body),
+            &mut self.out,
+            DeriveKind::Struct,
+        );
+        line(indent, &mut self.out, format_args!("pub enum {} {{", name));
+        for arm in &body.arms {
+            let hint = format!("{}_{}", name, arm.declaration.declarator.name);
+            let rust_type = self.rust_type_for_declaration(
+                &arm.declaration.type_spec,
+                &arm.declaration.declarator,
+                &hint,
+                indent,
+            )?;
+            for label in &arm.labels {
+                let variant_name = union_variant_name(label);
+                if rust_type == "()" {
+                    line(indent + 4, &mut self.out, format_args!("{},", variant_name));
+                } else {
+                    line(
+                        indent + 4,
+                        &mut self.out,
+                        format_args!("{} {{", variant_name),
+                    );
+                    line(
+                        indent + 8,
+                        &mut self.out,
+                        format_args!("{}: {},", arm.declaration.declarator.name, rust_type),
+                    );
+                    line(indent + 4, &mut self.out, format_args!("}},"));
+                }
+            }
+        }
+        line(indent, &mut self.out, format_args!("}}"));
+        self.out.push('\n');
+        Ok(())
+    }
+
+    fn emit_program(&mut self, item: &ProgramDecl, indent: usize) -> Result<(), GeneratorError> {
+        let module_name = to_snake_case(&item.name);
+        line(
+            indent,
+            &mut self.out,
+            format_args!("pub mod {} {{", module_name),
+        );
+        line(
+            indent + 4,
+            &mut self.out,
+            format_args!("pub const PROGRAM: u32 = {};", item.number),
+        );
+        self.out.push('\n');
+
+        for version in &item.versions {
+            let version_module = to_snake_case(&version.name);
+            line(
+                indent + 4,
+                &mut self.out,
+                format_args!("pub mod {} {{", version_module),
+            );
+            line(
+                indent + 8,
+                &mut self.out,
+                format_args!("pub const VERSION: u32 = {};", version.number),
+            );
+            for procedure in &version.procedures {
+                line(
+                    indent + 8,
+                    &mut self.out,
+                    format_args!("pub const {}: u32 = {};", procedure.name, procedure.number),
+                );
+            }
+            line(indent + 4, &mut self.out, format_args!("}}"));
+            self.out.push('\n');
+        }
+
+        line(indent, &mut self.out, format_args!("}}"));
+        self.out.push('\n');
+        Ok(())
+    }
+
+    fn emit_inline_helper_types(
+        &mut self,
+        target: &TypeSpec,
+        hint: &str,
+        indent: usize,
+    ) -> Result<(), GeneratorError> {
+        match target {
+            TypeSpec::Enum(body) => self.emit_named_enum(hint, body, indent),
+            TypeSpec::Struct(body) => self.emit_named_struct(hint, body, indent),
+            TypeSpec::Union(body) => self.emit_named_union(hint, body, indent),
+            _ => Ok(()),
+        }
+    }
+
+    fn rust_type_for_declaration(
+        &mut self,
+        target: &TypeSpec,
+        declarator: &Declarator,
+        hint: &str,
+        indent: usize,
+    ) -> Result<String, GeneratorError> {
+        let base = self.rust_type_for_base(target, hint, indent)?;
+        match &declarator.modifier {
+            Some(DeclaratorModifier::VariableArray(_)) => match target {
+                TypeSpec::Opaque => Ok("Bytes".to_string()),
+                TypeSpec::String => Ok("String".to_string()),
+                _ => Ok(format!("Vec<{}>", base)),
+            },
+            Some(DeclaratorModifier::FixedArray(bound)) => match target {
+                TypeSpec::Opaque => Ok(format!("[u8; {}]", render_array_bound(bound)?)),
+                _ => Ok(format!("[{}; {}]", base, render_array_bound(bound)?)),
+            },
+            Some(DeclaratorModifier::Optional) => Ok(format!("Option<Box<{}>>", base)),
+            None => match target {
+                TypeSpec::Opaque => Ok("u8".to_string()),
+                _ => Ok(base),
+            },
+        }
+    }
+
+    fn rust_type_for_base(
+        &mut self,
+        target: &TypeSpec,
+        hint: &str,
+        indent: usize,
+    ) -> Result<String, GeneratorError> {
+        match target {
+            TypeSpec::Void => Ok("()".to_string()),
+            TypeSpec::Bool => Ok("bool".to_string()),
+            TypeSpec::Int => Ok("i32".to_string()),
+            TypeSpec::UnsignedInt => Ok("u32".to_string()),
+            TypeSpec::Hyper => Ok("i64".to_string()),
+            TypeSpec::UnsignedHyper => Ok("u64".to_string()),
+            TypeSpec::Float => Ok("f32".to_string()),
+            TypeSpec::Double => Ok("f64".to_string()),
+            TypeSpec::Quadruple => Ok("[u8; 16]".to_string()),
+            TypeSpec::Opaque => Ok("u8".to_string()),
+            TypeSpec::String => Ok("String".to_string()),
+            TypeSpec::Identifier(name) => Ok(name.clone()),
+            TypeSpec::Enum(body) => {
+                self.emit_named_enum(hint, body, indent)?;
+                Ok(hint.to_string())
+            }
+            TypeSpec::Struct(body) => {
+                self.emit_named_struct(hint, body, indent)?;
+                Ok(hint.to_string())
+            }
+            TypeSpec::Union(body) => {
+                self.emit_named_union(hint, body, indent)?;
+                Ok(hint.to_string())
+            }
+        }
+    }
+
+    fn struct_is_eq(&self, body: &StructBody) -> bool {
+        body.declarations.iter().all(|declaration| {
+            self.declaration_is_eq(&declaration.type_spec, &declaration.declarator.modifier)
+        })
+    }
+
+    fn union_is_eq(&self, body: &UnionBody) -> bool {
+        body.arms.iter().all(|arm| {
+            self.declaration_is_eq(
+                &arm.declaration.type_spec,
+                &arm.declaration.declarator.modifier,
+            )
+        })
+    }
+
+    fn declaration_is_eq(&self, target: &TypeSpec, modifier: &Option<DeclaratorModifier>) -> bool {
+        self.modifier_is_eq(target, modifier) && self.type_spec_is_eq(target)
+    }
+
+    fn modifier_is_eq(&self, target: &TypeSpec, modifier: &Option<DeclaratorModifier>) -> bool {
+        match modifier {
+            Some(DeclaratorModifier::VariableArray(_)) => self.type_spec_is_eq(target),
+            Some(DeclaratorModifier::FixedArray(_)) => self.type_spec_is_eq(target),
+            Some(DeclaratorModifier::Optional) | None => true,
+        }
+    }
+
+    fn type_spec_is_eq(&self, target: &TypeSpec) -> bool {
+        match target {
+            TypeSpec::Float | TypeSpec::Double => false,
+            TypeSpec::Enum(_) => true,
+            TypeSpec::Struct(body) => self.struct_is_eq(body),
+            TypeSpec::Union(body) => self.union_is_eq(body),
+            TypeSpec::Identifier(name) => self.named_type_is_eq(name),
+            _ => true,
+        }
+    }
+
+    fn named_type_is_eq(&self, name: &str) -> bool {
+        match self.named_types.get(name) {
+            Some(NamedType::Typedef { target, modifier }) => {
+                self.declaration_is_eq(target, modifier)
+            }
+            Some(NamedType::Struct(body)) => self.struct_is_eq(body),
+            Some(NamedType::Enum) => true,
+            Some(NamedType::Union(body)) => self.union_is_eq(body),
+            None => true,
+        }
+    }
+}
+
+enum DeriveKind {
+    Struct,
+}
+
+fn emit_derive_block(indent: usize, is_eq: bool, out: &mut String, kind: DeriveKind) {
+    match kind {
+        DeriveKind::Struct if is_eq => line(
+            indent,
+            out,
+            format_args!("#[derive(Debug, Clone, PartialEq, Eq)]"),
+        ),
+        DeriveKind::Struct => line(
+            indent,
+            out,
+            format_args!("#[derive(Debug, Clone, PartialEq)]"),
+        ),
+    }
 }
 
 fn emit_program_stubs(
@@ -406,55 +738,45 @@ fn emit_dispatch_arm(
     Ok(())
 }
 
-fn rust_type_for_declaration(
-    target: &TypeSpec,
-    declarator: &Declarator,
-) -> Result<String, GeneratorError> {
-    match &declarator.modifier {
-        Some(DeclaratorModifier::VariableArray(_)) => match target {
-            TypeSpec::Opaque => Ok("Bytes".to_string()),
-            TypeSpec::String => Ok("String".to_string()),
-            other => Ok(format!("Vec<{}>", rust_type_for_base(other))),
-        },
-        None => Ok(rust_type_for_base(target)),
-    }
-}
-
-fn rust_type_for_base(target: &TypeSpec) -> String {
-    match target {
-        TypeSpec::Void => "()".to_string(),
-        TypeSpec::Bool => "bool".to_string(),
-        TypeSpec::Int => "i32".to_string(),
-        TypeSpec::UnsignedInt => "u32".to_string(),
-        TypeSpec::Hyper => "i64".to_string(),
-        TypeSpec::UnsignedHyper => "u64".to_string(),
-        TypeSpec::Opaque => "Bytes".to_string(),
-        TypeSpec::String => "String".to_string(),
-        TypeSpec::Identifier(name) => name.clone(),
-    }
-}
-
 fn schema_uses_bytes(schema: &Schema) -> bool {
     schema.items.iter().any(item_uses_bytes)
 }
 
 fn item_uses_bytes(item: &Item) -> bool {
     match item {
-        Item::Const(_) | Item::Enum(_) | Item::Program(_) => false,
+        Item::Const(_) | Item::Program(_) => false,
         Item::Typedef(item) => declaration_uses_bytes(&item.target, &item.declarator),
         Item::Struct(item) => item
-            .fields
+            .body
+            .declarations
             .iter()
-            .any(|field| declaration_uses_bytes(&field.field_type, &field.declarator)),
+            .any(|field| declaration_uses_bytes(&field.type_spec, &field.declarator)),
+        Item::Enum(_) => false,
+        Item::Union(item) => item.body.arms.iter().any(|arm| {
+            declaration_uses_bytes(&arm.declaration.type_spec, &arm.declaration.declarator)
+        }),
     }
 }
 
 fn declaration_uses_bytes(target: &TypeSpec, declarator: &Declarator) -> bool {
-    matches!(target, TypeSpec::Opaque)
+    uses_bytes_in_type_spec(target)
         || matches!(
             (&declarator.modifier, target),
             (Some(DeclaratorModifier::VariableArray(_)), TypeSpec::Opaque)
         )
+}
+
+fn uses_bytes_in_type_spec(target: &TypeSpec) -> bool {
+    match target {
+        TypeSpec::Enum(_) => false,
+        TypeSpec::Struct(body) => body.declarations.iter().any(|declaration| {
+            declaration_uses_bytes(&declaration.type_spec, &declaration.declarator)
+        }),
+        TypeSpec::Union(body) => body.arms.iter().any(|arm| {
+            declaration_uses_bytes(&arm.declaration.type_spec, &arm.declaration.declarator)
+        }),
+        _ => false,
+    }
 }
 
 fn render_value(value: &ValueExpr) -> String {
@@ -464,12 +786,87 @@ fn render_value(value: &ValueExpr) -> String {
     }
 }
 
+fn render_array_bound(value: &ValueExpr) -> Result<String, GeneratorError> {
+    match value {
+        ValueExpr::Number(value) if *value >= 0 => Ok(format!("{}usize", value)),
+        ValueExpr::Number(value) => Err(GeneratorError::UnsupportedConstruct(format!(
+            "negative fixed array bounds are not supported in Rust emission: {value}"
+        ))),
+        ValueExpr::Identifier(name) => Ok(format!("{name} as usize")),
+    }
+}
+
+fn union_variant_name(label: &UnionCaseLabel) -> String {
+    match label {
+        UnionCaseLabel::Case(ValueExpr::Identifier(name)) => to_pascal_case(name),
+        UnionCaseLabel::Case(ValueExpr::Number(value)) if *value >= 0 => format!("Case{value}"),
+        UnionCaseLabel::Case(ValueExpr::Number(value)) => {
+            format!("CaseNeg{}", value.unsigned_abs())
+        }
+        UnionCaseLabel::Default => "Default".to_string(),
+    }
+}
+
 fn to_snake_case(input: &str) -> String {
     input.to_ascii_lowercase()
+}
+
+fn to_pascal_case(input: &str) -> String {
+    let mut out = String::new();
+    let mut uppercase_next = true;
+
+    for ch in input.chars() {
+        if ch == '_' || ch == '-' {
+            uppercase_next = true;
+            continue;
+        }
+        if uppercase_next {
+            out.extend(ch.to_uppercase());
+            uppercase_next = false;
+        } else {
+            out.push(ch.to_ascii_lowercase());
+        }
+    }
+
+    if out.is_empty() {
+        "Variant".to_string()
+    } else {
+        out
+    }
 }
 
 fn line(indent: usize, out: &mut String, args: std::fmt::Arguments<'_>) {
     let _ = write!(out, "{:indent$}", "", indent = indent);
     let _ = out.write_fmt(args);
     out.push('\n');
+}
+
+fn build_named_types(schema: &Schema) -> BTreeMap<String, NamedType> {
+    let mut named_types = BTreeMap::new();
+
+    for item in &schema.items {
+        match item {
+            Item::Typedef(item) => {
+                named_types.insert(
+                    item.declarator.name.clone(),
+                    NamedType::Typedef {
+                        target: item.target.clone(),
+                        modifier: item.declarator.modifier.clone(),
+                    },
+                );
+            }
+            Item::Struct(item) => {
+                named_types.insert(item.name.clone(), NamedType::Struct(item.body.clone()));
+            }
+            Item::Enum(item) => {
+                named_types.insert(item.name.clone(), NamedType::Enum);
+            }
+            Item::Union(item) => {
+                named_types.insert(item.name.clone(), NamedType::Union(item.body.clone()));
+            }
+            Item::Const(_) | Item::Program(_) => {}
+        }
+    }
+
+    named_types
 }

@@ -1,0 +1,17 @@
+const OCTAL_BOUND = 8
+typedef float pdx_ratio_t
+typedef double pdx_measure_t
+typedef quadruple pdx_wide_t
+struct pdx_full_t
+  opaque fixed[OCTAL_BOUND]
+  pdx_ratio_t *next
+union pdx_payload_t
+  switch int kind
+    case 1
+      int single
+    case 2
+    case 3
+      string text<>
+    default
+      void nothing
+typedef enum { VALUE_ONE = 1, VALUE_TWO = 2 } pdx_inline_enum_t
