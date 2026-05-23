@@ -12,7 +12,8 @@ categories.workspace = true
 description = "Server registration and dispatch for ONC RPC services."
 
 [dependencies]
+bytes.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 onc-rpc-runtime = { path = "../onc-rpc-runtime" }
-
+onc-rpc-wire = { path = "../onc-rpc-wire" }

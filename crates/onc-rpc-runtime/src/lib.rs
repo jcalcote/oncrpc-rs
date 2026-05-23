@@ -1,8 +1,12 @@
-//! Runtime primitives for ONC RPC over TCP.
+//! Minimal client-side ONC RPC contracts for generated stubs.
 
-use onc_rpc_auth::AuthFlavor;
-use onc_rpc_wire::RecordMarker;
+use bytes::Bytes;
+pub use onc_rpc_wire::{
+    AcceptedReply, AcceptedStatus, AuthStat, MessageBody, OpaqueAuth, Procedure, ProgramVersion,
+    RecordMarker, RecordRead, RejectedReply, ReplyBody, RpcMessage, VersionRange, WireError, Xid,
+};
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 use thiserror::Error;
 
@@ -12,49 +16,263 @@ pub struct ClientConfig {
     pub local_addr: Option<SocketAddr>,
     pub connect_timeout: Duration,
     pub service_name: Option<String>,
-    pub auth: AuthFlavor,
+    pub credentials: OpaqueAuth,
+    pub verifier: OpaqueAuth,
 }
 
 impl ClientConfig {
-    pub fn new(remote_addr: SocketAddr, auth: AuthFlavor) -> Self {
+    pub fn new(remote_addr: SocketAddr) -> Self {
         Self {
             remote_addr,
             local_addr: None,
             connect_timeout: Duration::from_secs(30),
             service_name: None,
-            auth,
+            credentials: OpaqueAuth::none(),
+            verifier: OpaqueAuth::none(),
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Xid(pub u32);
-
-#[derive(Debug, Clone)]
-pub struct Reply {
-    pub xid: Xid,
-    pub payload: Vec<u8>,
-    pub marker: RecordMarker,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallRequest {
+    pub program: ProgramVersion,
+    pub procedure: Procedure,
+    pub credentials: OpaqueAuth,
+    pub verifier: OpaqueAuth,
+    pub payload: Bytes,
 }
 
-#[derive(Debug, Error)]
+impl CallRequest {
+    pub fn new(program: ProgramVersion, procedure: Procedure, payload: Bytes) -> Self {
+        Self {
+            program,
+            procedure,
+            credentials: OpaqueAuth::none(),
+            verifier: OpaqueAuth::none(),
+            payload,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallResponse {
+    pub xid: Xid,
+    pub verifier: OpaqueAuth,
+    pub payload: Bytes,
+}
+
+pub trait ClientTransport: Send + Sync + 'static {
+    fn call(&self, request: RpcMessage) -> Result<RpcMessage, RuntimeError>;
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
 pub enum RuntimeError {
-    #[error("tcp record fragmentation support is not implemented yet")]
-    FragmentationNotImplemented,
     #[error("transport failure: {0}")]
     Transport(String),
+    #[error("response xid mismatch: expected {expected:?}, got {actual:?}")]
+    XidMismatch { expected: Xid, actual: Xid },
+    #[error("received an rpc call message where a reply was expected")]
+    UnexpectedCallMessage,
+    #[error("remote program is unavailable")]
+    ProgramUnavailable,
+    #[error("remote program version mismatch: supported range {0:?}")]
+    ProgramMismatch(VersionRange),
+    #[error("remote procedure is unavailable")]
+    ProcedureUnavailable,
+    #[error("remote reported garbage arguments")]
+    GarbageArgs,
+    #[error("remote reported a system error")]
+    SystemError,
+    #[error("rpc version mismatch: supported range {0:?}")]
+    RpcMismatch(VersionRange),
+    #[error("rpc auth error: {0:?}")]
+    AuthError(AuthStat),
 }
 
-pub struct Client {
+pub struct Client<T> {
     config: ClientConfig,
+    transport: T,
+    next_xid: AtomicU32,
 }
 
-impl Client {
-    pub fn new(config: ClientConfig) -> Self {
-        Self { config }
+impl<T> Client<T>
+where
+    T: ClientTransport,
+{
+    pub fn new(config: ClientConfig, transport: T) -> Self {
+        Self {
+            config,
+            transport,
+            next_xid: AtomicU32::new(1),
+        }
     }
 
     pub fn config(&self) -> &ClientConfig {
         &self.config
+    }
+
+    pub fn call(&self, request: CallRequest) -> Result<CallResponse, RuntimeError> {
+        let xid = Xid(self.next_xid.fetch_add(1, Ordering::Relaxed));
+        let wire_request = self.build_request_message(xid, request);
+        let reply = self.transport.call(wire_request)?;
+
+        if reply.xid != xid {
+            return Err(RuntimeError::XidMismatch {
+                expected: xid,
+                actual: reply.xid,
+            });
+        }
+
+        match reply.body {
+            MessageBody::Call(_) => Err(RuntimeError::UnexpectedCallMessage),
+            MessageBody::Reply(ReplyBody::Accepted(AcceptedReply { verifier, status })) => {
+                match status {
+                    AcceptedStatus::Success(payload) => Ok(CallResponse {
+                        xid,
+                        verifier,
+                        payload,
+                    }),
+                    AcceptedStatus::ProgramUnavailable => Err(RuntimeError::ProgramUnavailable),
+                    AcceptedStatus::ProgramMismatch(range) => {
+                        Err(RuntimeError::ProgramMismatch(range))
+                    }
+                    AcceptedStatus::ProcedureUnavailable => Err(RuntimeError::ProcedureUnavailable),
+                    AcceptedStatus::GarbageArgs => Err(RuntimeError::GarbageArgs),
+                    AcceptedStatus::SystemError => Err(RuntimeError::SystemError),
+                }
+            }
+            MessageBody::Reply(ReplyBody::Denied(RejectedReply::RpcMismatch(range))) => {
+                Err(RuntimeError::RpcMismatch(range))
+            }
+            MessageBody::Reply(ReplyBody::Denied(RejectedReply::AuthError(status))) => {
+                Err(RuntimeError::AuthError(status))
+            }
+        }
+    }
+
+    fn build_request_message(&self, xid: Xid, request: CallRequest) -> RpcMessage {
+        let credentials = if request.credentials == OpaqueAuth::none() {
+            self.config.credentials.clone()
+        } else {
+            request.credentials
+        };
+
+        let verifier = if request.verifier == OpaqueAuth::none() {
+            self.config.verifier.clone()
+        } else {
+            request.verifier
+        };
+
+        RpcMessage {
+            xid,
+            body: MessageBody::Call(onc_rpc_wire::CallBody::new(
+                request.program,
+                request.procedure,
+                credentials,
+                verifier,
+                request.payload,
+            )),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::VecDeque;
+    use std::sync::Mutex;
+
+    struct FakeTransport {
+        replies: Mutex<VecDeque<Result<RpcMessage, RuntimeError>>>,
+    }
+
+    impl FakeTransport {
+        fn new(replies: Vec<Result<RpcMessage, RuntimeError>>) -> Self {
+            Self {
+                replies: Mutex::new(replies.into()),
+            }
+        }
+    }
+
+    impl ClientTransport for FakeTransport {
+        fn call(&self, _request: RpcMessage) -> Result<RpcMessage, RuntimeError> {
+            self.replies
+                .lock()
+                .expect("mutex poisoned")
+                .pop_front()
+                .expect("test reply should exist")
+        }
+    }
+
+    fn config() -> ClientConfig {
+        ClientConfig::new("127.0.0.1:2049".parse().expect("valid socket"))
+    }
+
+    fn request() -> CallRequest {
+        CallRequest::new(
+            ProgramVersion {
+                program: 100_003,
+                version: 3,
+            },
+            Procedure(1),
+            Bytes::from_static(b"payload"),
+        )
+    }
+
+    #[test]
+    fn client_call_returns_success_payload() {
+        let reply = RpcMessage {
+            xid: Xid(1),
+            body: MessageBody::Reply(ReplyBody::Accepted(AcceptedReply {
+                verifier: OpaqueAuth::none(),
+                status: AcceptedStatus::Success(Bytes::from_static(b"reply")),
+            })),
+        };
+        let client = Client::new(config(), FakeTransport::new(vec![Ok(reply)]));
+
+        let response = client.call(request()).expect("call should succeed");
+
+        assert_eq!(response.xid, Xid(1));
+        assert_eq!(response.payload, Bytes::from_static(b"reply"));
+    }
+
+    #[test]
+    fn client_call_rejects_xid_mismatch() {
+        let reply = RpcMessage {
+            xid: Xid(999),
+            body: MessageBody::Reply(ReplyBody::Accepted(AcceptedReply {
+                verifier: OpaqueAuth::none(),
+                status: AcceptedStatus::Success(Bytes::new()),
+            })),
+        };
+        let client = Client::new(config(), FakeTransport::new(vec![Ok(reply)]));
+
+        let error = client.call(request()).expect_err("xid mismatch must fail");
+
+        assert_eq!(
+            error,
+            RuntimeError::XidMismatch {
+                expected: Xid(1),
+                actual: Xid(999),
+            }
+        );
+    }
+
+    #[test]
+    fn client_call_maps_program_unavailable_reply() {
+        let reply = RpcMessage {
+            xid: Xid(1),
+            body: MessageBody::Reply(ReplyBody::Accepted(AcceptedReply {
+                verifier: OpaqueAuth::none(),
+                status: AcceptedStatus::ProgramUnavailable,
+            })),
+        };
+        let client = Client::new(config(), FakeTransport::new(vec![Ok(reply)]));
+
+        let error = client
+            .call(request())
+            .expect_err("program unavailable must fail");
+
+        assert_eq!(error, RuntimeError::ProgramUnavailable);
     }
 }
