@@ -1,0 +1,18 @@
+[package]
+name = "onc-rpc-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Server registration and dispatch for ONC RPC services."
+
+[dependencies]
+thiserror.workspace = true
+tokio.workspace = true
+onc-rpc-runtime = { path = "../onc-rpc-runtime" }
+

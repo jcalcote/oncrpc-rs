@@ -1,0 +1,21 @@
+[package]
+name = "onc-rpc-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "TCP runtime primitives for ONC RPC clients."
+
+[dependencies]
+bytes.workspace = true
+onc-rpc.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+onc-rpc-auth = { path = "../onc-rpc-auth" }
+

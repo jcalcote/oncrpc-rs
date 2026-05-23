@@ -1,0 +1,16 @@
+[package]
+name = "onc-rpc-auth"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Authentication types and helpers for ONC RPC clients and servers."
+
+[dependencies]
+thiserror.workspace = true
+

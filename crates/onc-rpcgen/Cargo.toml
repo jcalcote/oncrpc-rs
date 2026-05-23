@@ -1,0 +1,16 @@
+[package]
+name = "onc-rpcgen"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Code generation for ONC RPC XDR programs and stubs."
+
+[dependencies]
+thiserror.workspace = true
+
