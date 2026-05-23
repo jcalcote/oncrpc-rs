@@ -1,0 +1,18 @@
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct pdcm_copy_arg_t {
+    pub job_id: pdx_job_id_t,
+    pub job_update: pddmc_job_update_t,
+    pub src_instance: pddmc_inst_info_t,
+}
+
+pub mod pdcm_program {
+    pub const PROGRAM: u32 = 100666;
+
+    pub mod pdcm_rpc_v8 {
+        pub const VERSION: u32 = 8;
+        pub const PDCM_NULL: u32 = 0;
+        pub const PDCM_DO_COPY: u32 = 1;
+    }
+
+}
+

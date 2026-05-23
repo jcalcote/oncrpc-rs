@@ -2,9 +2,11 @@
 //! client/server stub generation.
 
 mod ast;
+mod emit;
 mod parser;
 
 pub use ast::*;
+pub use emit::emit_rust_types;
 use std::fs;
 use std::path::Path;
 use thiserror::Error;
@@ -32,6 +34,16 @@ pub fn parse_x_file(path: impl AsRef<Path>) -> Result<Schema, GeneratorError> {
 
 pub fn parse_x_source(source: &str) -> Result<Schema, GeneratorError> {
     parser::parse_x_source(source)
+}
+
+pub fn emit_rust_types_from_x_file(path: impl AsRef<Path>) -> Result<String, GeneratorError> {
+    let schema = parse_x_file(path)?;
+    emit_rust_types(&schema)
+}
+
+pub fn emit_rust_types_from_x_source(source: &str) -> Result<String, GeneratorError> {
+    let schema = parse_x_source(source)?;
+    emit_rust_types(&schema)
 }
 
 pub fn generate_from_x_file(path: impl AsRef<Path>) -> Result<(), GeneratorError> {
