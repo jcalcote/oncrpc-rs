@@ -1,19 +1,43 @@
 //! Core generator scaffolding for `.x`-based XDR type generation and ONC RPC
 //! client/server stub generation.
 
+mod ast;
+mod parser;
+
+pub use ast::*;
+use std::fs;
 use std::path::Path;
 use thiserror::Error;
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, PartialEq, Eq)]
 pub enum GeneratorError {
-    #[error("xdr/rpc generation is not implemented yet for {0}")]
+    #[error("failed to read XDR source from {path}: {message}")]
+    Io { path: String, message: String },
+    #[error("unsupported XDR/RPC construct: {0}")]
+    UnsupportedConstruct(String),
+    #[error("failed to parse XDR/RPC source: {0}")]
+    Parse(String),
+    #[error("code generation is not implemented yet for {0}")]
     NotImplemented(String),
 }
 
+pub fn parse_x_file(path: impl AsRef<Path>) -> Result<Schema, GeneratorError> {
+    let path = path.as_ref();
+    let source = fs::read_to_string(path).map_err(|error| GeneratorError::Io {
+        path: path.display().to_string(),
+        message: error.to_string(),
+    })?;
+    parse_x_source(&source)
+}
+
+pub fn parse_x_source(source: &str) -> Result<Schema, GeneratorError> {
+    parser::parse_x_source(source)
+}
+
 pub fn generate_from_x_file(path: impl AsRef<Path>) -> Result<(), GeneratorError> {
-    Err(GeneratorError::NotImplemented(
-        path.as_ref().display().to_string(),
-    ))
+    let path = path.as_ref();
+    parse_x_file(path)?;
+    Err(GeneratorError::NotImplemented(path.display().to_string()))
 }
 
 pub fn fixture_root() -> &'static str {
