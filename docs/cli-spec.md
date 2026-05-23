@@ -130,6 +130,8 @@ oncrpcgen generate proto.x --no-server --sync --async --timeouts --out-dir gener
 
 The intended cross-command options are:
 
+- `-h`, `--help`
+- `--include-dir <dir>`
 - `--out-dir <dir>`
 - `--module <name>`
 - `--no-types`
@@ -145,6 +147,22 @@ The intended cross-command options are:
 - `--verbose`
 
 ### Option Semantics
+
+#### `-h`, `--help`
+
+Print command help and exit successfully.
+
+The CLI should support both top-level and subcommand-scoped help through the
+standard command-line interface behavior.
+
+#### `--include-dir <dir>`
+
+Add an include search directory used when resolving `%#include` references from
+`.x` files.
+
+The first implementation should support repeated `--include-dir` flags and use
+them together with the input file's parent directory to resolve included `.x`
+files.
 
 #### `--out-dir <dir>`
 

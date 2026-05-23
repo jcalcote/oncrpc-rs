@@ -2,6 +2,7 @@ use crate::GeneratorError;
 use crate::ast::*;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::collections::HashSet;
 use std::fmt::Write;
 
 pub fn emit_rust_types(schema: &Schema) -> Result<String, GeneratorError> {
@@ -419,51 +420,81 @@ impl TypeEmitter {
     }
 
     fn struct_is_eq(&self, body: &StructBody) -> bool {
-        body.declarations.iter().all(|declaration| {
-            self.declaration_is_eq(&declaration.type_spec, &declaration.declarator.modifier)
-        })
+        self.struct_is_eq_with_seen(body, &mut HashSet::new())
     }
 
-    fn union_is_eq(&self, body: &UnionBody) -> bool {
-        body.arms.iter().all(|arm| {
-            self.declaration_is_eq(
-                &arm.declaration.type_spec,
-                &arm.declaration.declarator.modifier,
+    fn struct_is_eq_with_seen(&self, body: &StructBody, seen: &mut HashSet<String>) -> bool {
+        body.declarations.iter().all(|declaration| {
+            self.declaration_is_eq_with_seen(
+                &declaration.type_spec,
+                &declaration.declarator.modifier,
+                seen,
             )
         })
     }
 
-    fn declaration_is_eq(&self, target: &TypeSpec, modifier: &Option<DeclaratorModifier>) -> bool {
-        self.modifier_is_eq(target, modifier) && self.type_spec_is_eq(target)
+    fn union_is_eq(&self, body: &UnionBody) -> bool {
+        self.union_is_eq_with_seen(body, &mut HashSet::new())
     }
 
-    fn modifier_is_eq(&self, target: &TypeSpec, modifier: &Option<DeclaratorModifier>) -> bool {
+    fn union_is_eq_with_seen(&self, body: &UnionBody, seen: &mut HashSet<String>) -> bool {
+        body.arms.iter().all(|arm| {
+            self.declaration_is_eq_with_seen(
+                &arm.declaration.type_spec,
+                &arm.declaration.declarator.modifier,
+                seen,
+            )
+        })
+    }
+
+    fn declaration_is_eq_with_seen(
+        &self,
+        target: &TypeSpec,
+        modifier: &Option<DeclaratorModifier>,
+        seen: &mut HashSet<String>,
+    ) -> bool {
+        self.modifier_is_eq_with_seen(target, modifier, seen)
+            && self.type_spec_is_eq_with_seen(target, seen)
+    }
+
+    fn modifier_is_eq_with_seen(
+        &self,
+        target: &TypeSpec,
+        modifier: &Option<DeclaratorModifier>,
+        seen: &mut HashSet<String>,
+    ) -> bool {
         match modifier {
-            Some(DeclaratorModifier::VariableArray(_)) => self.type_spec_is_eq(target),
-            Some(DeclaratorModifier::FixedArray(_)) => self.type_spec_is_eq(target),
+            Some(DeclaratorModifier::VariableArray(_)) => {
+                self.type_spec_is_eq_with_seen(target, seen)
+            }
+            Some(DeclaratorModifier::FixedArray(_)) => self.type_spec_is_eq_with_seen(target, seen),
             Some(DeclaratorModifier::Optional) | None => true,
         }
     }
 
-    fn type_spec_is_eq(&self, target: &TypeSpec) -> bool {
+    fn type_spec_is_eq_with_seen(&self, target: &TypeSpec, seen: &mut HashSet<String>) -> bool {
         match target {
             TypeSpec::Float | TypeSpec::Double => false,
             TypeSpec::Enum(_) => true,
-            TypeSpec::Struct(body) => self.struct_is_eq(body),
-            TypeSpec::Union(body) => self.union_is_eq(body),
-            TypeSpec::Identifier(name) => self.named_type_is_eq(name),
+            TypeSpec::Struct(body) => self.struct_is_eq_with_seen(body, seen),
+            TypeSpec::Union(body) => self.union_is_eq_with_seen(body, seen),
+            TypeSpec::Identifier(name) => self.named_type_is_eq_with_seen(name, seen),
             _ => true,
         }
     }
 
-    fn named_type_is_eq(&self, name: &str) -> bool {
+    fn named_type_is_eq_with_seen(&self, name: &str, seen: &mut HashSet<String>) -> bool {
+        if !seen.insert(name.to_string()) {
+            return true;
+        }
+
         match self.named_types.get(name) {
             Some(NamedType::Typedef { target, modifier }) => {
-                self.declaration_is_eq(target, modifier)
+                self.declaration_is_eq_with_seen(target, modifier, seen)
             }
-            Some(NamedType::Struct(body)) => self.struct_is_eq(body),
+            Some(NamedType::Struct(body)) => self.struct_is_eq_with_seen(body, seen),
             Some(NamedType::Enum) => true,
-            Some(NamedType::Union(body)) => self.union_is_eq(body),
+            Some(NamedType::Union(body)) => self.union_is_eq_with_seen(body, seen),
             None => true,
         }
     }

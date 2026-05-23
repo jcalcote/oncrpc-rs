@@ -314,7 +314,7 @@ impl Parser {
         let return_type = self.parse_type_spec()?;
         let name = self.expect_identifier()?;
         self.expect_symbol('(')?;
-        let argument_type = self.parse_type_spec()?;
+        let argument_type = self.parse_procedure_argument_type()?;
         self.expect_symbol(')')?;
         self.expect_symbol('=')?;
         let number = self.expect_u32()?;
@@ -326,6 +326,19 @@ impl Parser {
             argument_type,
             number,
         })
+    }
+
+    fn parse_procedure_argument_type(&mut self) -> Result<TypeSpec, GeneratorError> {
+        if matches!(self.peek(), Token::Keyword(Keyword::Void)) {
+            self.next();
+            return Ok(TypeSpec::Void);
+        }
+
+        let argument_type = self.parse_type_spec()?;
+        if !matches!(self.peek(), Token::Symbol(')')) {
+            let _ = self.parse_declarator()?;
+        }
+        Ok(argument_type)
     }
 
     fn parse_type_spec(&mut self) -> Result<TypeSpec, GeneratorError> {
@@ -347,12 +360,41 @@ impl Parser {
                 ))),
             },
             Token::Identifier(name) => Ok(TypeSpec::Identifier(name)),
-            Token::Keyword(Keyword::Enum) => Ok(TypeSpec::Enum(self.parse_enum_body()?)),
+            Token::Keyword(Keyword::Enum) => {
+                if let Token::Identifier(name) = self.peek().clone() {
+                    if !matches!(self.peek_n(1), Token::Symbol('{')) {
+                        self.next();
+                        Ok(TypeSpec::Identifier(name))
+                    } else {
+                        Ok(TypeSpec::Enum(self.parse_enum_body()?))
+                    }
+                } else {
+                    Ok(TypeSpec::Enum(self.parse_enum_body()?))
+                }
+            }
             Token::Keyword(Keyword::Struct) => {
-                Ok(TypeSpec::Struct(Box::new(self.parse_struct_body()?)))
+                if let Token::Identifier(name) = self.peek().clone() {
+                    if !matches!(self.peek_n(1), Token::Symbol('{')) {
+                        self.next();
+                        Ok(TypeSpec::Identifier(name))
+                    } else {
+                        Ok(TypeSpec::Struct(Box::new(self.parse_struct_body()?)))
+                    }
+                } else {
+                    Ok(TypeSpec::Struct(Box::new(self.parse_struct_body()?)))
+                }
             }
             Token::Keyword(Keyword::Union) => {
-                Ok(TypeSpec::Union(Box::new(self.parse_union_body()?)))
+                if let Token::Identifier(name) = self.peek().clone() {
+                    if !matches!(self.peek_n(1), Token::Keyword(Keyword::Switch)) {
+                        self.next();
+                        Ok(TypeSpec::Identifier(name))
+                    } else {
+                        Ok(TypeSpec::Union(Box::new(self.parse_union_body()?)))
+                    }
+                } else {
+                    Ok(TypeSpec::Union(Box::new(self.parse_union_body()?)))
+                }
             }
             Token::Keyword(other) => Err(GeneratorError::Parse(format!(
                 "unsupported keyword in type position: {other:?}"
@@ -436,7 +478,16 @@ impl Parser {
 
     fn parse_declaration(&mut self) -> Result<Declaration, GeneratorError> {
         let type_spec = self.parse_type_spec()?;
-        let declarator = self.parse_declarator()?;
+        let declarator = if matches!(type_spec, TypeSpec::Void)
+            && matches!(self.peek(), Token::Symbol(';') | Token::Symbol(')'))
+        {
+            Declarator {
+                name: String::new(),
+                modifier: None,
+            }
+        } else {
+            self.parse_declarator()?
+        };
         Ok(Declaration {
             type_spec,
             declarator,
@@ -526,6 +577,10 @@ impl Parser {
 
     fn peek(&self) -> &Token {
         &self.tokens[self.idx]
+    }
+
+    fn peek_n(&self, offset: usize) -> &Token {
+        &self.tokens[self.idx + offset]
     }
 
     fn next(&mut self) -> Token {
