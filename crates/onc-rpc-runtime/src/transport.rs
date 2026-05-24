@@ -17,7 +17,7 @@ type PendingMap = Arc<Mutex<HashMap<Xid, oneshot::Sender<Result<RpcMessage, Runt
 pub struct TokioAsyncClientTransport {
     writer: Arc<Mutex<OwnedWriteHalf>>,
     pending: PendingMap,
-    read_timeout: Option<std::time::Duration>,
+    default_call_timeout: Option<std::time::Duration>,
     write_timeout: Option<std::time::Duration>,
 }
 
@@ -46,11 +46,11 @@ impl TokioAsyncClientTransport {
             })?
             .map_err(|err| RuntimeError::Transport(err.to_string()))?;
 
-        Self::from_stream_with_timeouts(stream, config.read_timeout, config.write_timeout)
+        Self::from_stream_with_timeouts(stream, config.default_call_timeout, config.write_timeout)
     }
     fn from_stream_with_timeouts(
         stream: TcpStream,
-        read_timeout: Option<std::time::Duration>,
+        default_call_timeout: Option<std::time::Duration>,
         write_timeout: Option<std::time::Duration>,
     ) -> Result<Self, RuntimeError> {
         let (reader, writer) = stream.into_split();
@@ -61,7 +61,7 @@ impl TokioAsyncClientTransport {
         Ok(Self {
             writer: Arc::new(Mutex::new(writer)),
             pending,
-            read_timeout,
+            default_call_timeout,
             write_timeout,
         })
     }
@@ -134,13 +134,13 @@ impl AsyncClientTransport for TokioAsyncClientTransport {
             return Err(error);
         }
 
-        let reply_result = match self.read_timeout {
+        let reply_result = match self.default_call_timeout {
             Some(timeout_duration) => match timeout(timeout_duration, rx).await {
                 Ok(result) => result,
                 Err(_) => {
                     self.pending.lock().await.remove(&xid);
                     return Err(RuntimeError::Transport(format!(
-                        "read timeout after {:?}",
+                        "call timeout after {:?}",
                         timeout_duration
                     )));
                 }

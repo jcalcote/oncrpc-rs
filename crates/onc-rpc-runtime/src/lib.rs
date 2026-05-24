@@ -23,7 +23,7 @@ pub struct ClientConfig {
     pub remote_addr: SocketAddr,
     pub local_addr: Option<SocketAddr>,
     pub connect_timeout: Duration,
-    pub read_timeout: Option<Duration>,
+    pub default_call_timeout: Option<Duration>,
     pub write_timeout: Option<Duration>,
     pub service_name: Option<String>,
     pub credentials: OpaqueAuth,
@@ -36,7 +36,7 @@ impl ClientConfig {
             remote_addr,
             local_addr: None,
             connect_timeout: Duration::from_secs(30),
-            read_timeout: None,
+            default_call_timeout: None,
             write_timeout: None,
             service_name: None,
             credentials: OpaqueAuth::none(),
@@ -54,8 +54,13 @@ impl ClientConfig {
         self
     }
 
-    pub fn with_read_timeout(mut self, timeout: Duration) -> Self {
-        self.read_timeout = Some(timeout);
+    pub fn with_default_call_timeout(mut self, timeout: Duration) -> Self {
+        self.default_call_timeout = Some(timeout);
+        self
+    }
+
+    pub fn without_default_call_timeout(mut self) -> Self {
+        self.default_call_timeout = None;
         self
     }
 

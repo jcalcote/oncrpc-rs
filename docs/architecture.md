@@ -76,7 +76,7 @@ Owns client-side transport/runtime behavior:
 - TCP connection setup
 - local bind support
 - connect timeouts
-- read and write timeout policy
+- default per-call timeout and write timeout policy
 - request/reply correlation
 - TCP record framing and reassembly
 - synchronous and asynchronous client call handling
@@ -106,8 +106,11 @@ requirements. In practice that means:
   underlying transport supports it
 - synchronous convenience layers must not silently collapse concurrent callers
   onto one serialized execution path
-- connection, read, and write timeout behavior should be configurable through
-  explicit client configuration rather than hidden transport defaults
+- connection, default per-call reply timeout, and write timeout behavior should
+  be configurable through explicit client configuration rather than hidden
+  transport defaults
+- no default call timeout should remain a supported and explicit choice for
+  long-running synchronous or asynchronous operations
 
 ### `onc-rpc-server`
 

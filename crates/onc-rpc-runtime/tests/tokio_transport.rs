@@ -157,7 +157,7 @@ async fn async_transport_correlates_concurrent_requests_by_xid() {
 }
 
 #[tokio::test]
-async fn async_transport_honors_read_timeout() {
+async fn async_transport_honors_default_call_timeout() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("listener should bind");
@@ -170,7 +170,7 @@ async fn async_transport_honors_read_timeout() {
 
     let config = ClientConfig::new(addr)
         .with_connect_timeout(Duration::from_secs(5))
-        .with_read_timeout(Duration::from_millis(50));
+        .with_default_call_timeout(Duration::from_millis(50));
     let transport = TokioAsyncClientTransport::connect(&config)
         .await
         .expect("client should connect");
@@ -191,11 +191,11 @@ async fn async_transport_honors_read_timeout() {
     match error {
         onc_rpc_runtime::RuntimeError::Transport(message) => {
             assert!(
-                message.contains("read timeout"),
+                message.contains("call timeout"),
                 "unexpected message: {message}"
             );
         }
-        other => panic!("expected read-timeout transport error, got {other:?}"),
+        other => panic!("expected call-timeout transport error, got {other:?}"),
     }
 }
 
