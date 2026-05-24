@@ -1,4 +1,6 @@
 use crate::GeneratorError;
+use crate::LoadedModule;
+use crate::LoadedSchemaSet;
 use crate::ast::*;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -8,6 +10,15 @@ use std::fmt::Write;
 pub fn emit_rust_types(schema: &Schema) -> Result<String, GeneratorError> {
     let mut emitter = TypeEmitter::new(schema);
     emitter.emit_schema(schema)?;
+    Ok(emitter.out)
+}
+
+pub fn emit_rust_types_for_module(
+    module: &LoadedModule,
+    loaded: &LoadedSchemaSet,
+) -> Result<String, GeneratorError> {
+    let mut emitter = TypeEmitter::new_for_module(module, loaded);
+    emitter.emit_schema(&module.schema)?;
     Ok(emitter.out)
 }
 
@@ -33,10 +44,17 @@ pub fn emit_rust_stubs(schema: &Schema) -> Result<String, GeneratorError> {
     Ok(out)
 }
 
+pub fn emit_rust_stubs_for_module(module: &LoadedModule) -> Result<String, GeneratorError> {
+    emit_rust_stubs(&module.schema)
+}
+
 struct TypeEmitter {
     out: String,
     emitted_helpers: BTreeSet<String>,
     named_types: BTreeMap<String, NamedType>,
+    current_module: Option<String>,
+    type_owners: BTreeMap<String, String>,
+    const_owners: BTreeMap<String, String>,
 }
 
 #[derive(Clone)]
@@ -60,6 +78,24 @@ impl TypeEmitter {
             out,
             emitted_helpers: BTreeSet::new(),
             named_types: build_named_types(schema),
+            current_module: None,
+            type_owners: BTreeMap::new(),
+            const_owners: BTreeMap::new(),
+        }
+    }
+
+    fn new_for_module(module: &LoadedModule, loaded: &LoadedSchemaSet) -> Self {
+        let mut out = String::new();
+        if schema_uses_bytes(&module.schema) {
+            out.push_str("use bytes::Bytes;\n\n");
+        }
+        Self {
+            out,
+            emitted_helpers: BTreeSet::new(),
+            named_types: build_named_types_for_modules(&loaded.modules),
+            current_module: Some(module.module_name.clone()),
+            type_owners: build_type_owners(&loaded.modules),
+            const_owners: build_const_owners(&loaded.modules),
         }
     }
 
@@ -82,14 +118,11 @@ impl TypeEmitter {
     }
 
     fn emit_const(&mut self, item: &ConstDecl, indent: usize) -> Result<(), GeneratorError> {
+        let value = self.render_value(&item.value);
         line(
             indent,
             &mut self.out,
-            format_args!(
-                "pub const {}: i64 = {};",
-                item.name,
-                render_value(&item.value)
-            ),
+            format_args!("pub const {}: i64 = {};", item.name, value),
         );
         self.out.push('\n');
         Ok(())
@@ -238,10 +271,11 @@ impl TypeEmitter {
         line(indent, &mut self.out, format_args!("#[repr(i32)]"));
         line(indent, &mut self.out, format_args!("pub enum {} {{", name));
         for variant in &body.variants {
+            let value = self.render_value(&variant.value);
             line(
                 indent + 4,
                 &mut self.out,
-                format_args!("{} = {},", variant.name, render_value(&variant.value)),
+                format_args!("{} = {},", variant.name, value),
             );
         }
         line(indent, &mut self.out, format_args!("}}"));
@@ -374,8 +408,8 @@ impl TypeEmitter {
                 _ => Ok(format!("Vec<{}>", base)),
             },
             Some(DeclaratorModifier::FixedArray(bound)) => match target {
-                TypeSpec::Opaque => Ok(format!("[u8; {}]", render_array_bound(bound)?)),
-                _ => Ok(format!("[{}; {}]", base, render_array_bound(bound)?)),
+                TypeSpec::Opaque => Ok(format!("[u8; {}]", self.render_array_bound(bound)?)),
+                _ => Ok(format!("[{}; {}]", base, self.render_array_bound(bound)?)),
             },
             Some(DeclaratorModifier::Optional) => Ok(format!("Option<Box<{}>>", base)),
             None => match target {
@@ -403,7 +437,7 @@ impl TypeEmitter {
             TypeSpec::Quadruple => Ok("[u8; 16]".to_string()),
             TypeSpec::Opaque => Ok("u8".to_string()),
             TypeSpec::String => Ok("String".to_string()),
-            TypeSpec::Identifier(name) => Ok(name.clone()),
+            TypeSpec::Identifier(name) => Ok(self.qualify_type_name(name)),
             TypeSpec::Enum(body) => {
                 self.emit_named_enum(hint, body, indent)?;
                 Ok(hint.to_string())
@@ -496,6 +530,43 @@ impl TypeEmitter {
             Some(NamedType::Enum) => true,
             Some(NamedType::Union(body)) => self.union_is_eq_with_seen(body, seen),
             None => true,
+        }
+    }
+
+    fn qualify_type_name(&self, name: &str) -> String {
+        match (&self.current_module, self.type_owners.get(name)) {
+            (Some(current), Some(owner)) if owner != current => {
+                format!("crate::{owner}::{name}")
+            }
+            _ => name.to_string(),
+        }
+    }
+
+    fn qualify_const_name(&self, name: &str) -> String {
+        match (&self.current_module, self.const_owners.get(name)) {
+            (Some(current), Some(owner)) if owner != current => {
+                format!("crate::{owner}::{name}")
+            }
+            _ => name.to_string(),
+        }
+    }
+
+    fn render_value(&self, value: &ValueExpr) -> String {
+        match value {
+            ValueExpr::Number(value) => value.to_string(),
+            ValueExpr::Identifier(name) => self.qualify_const_name(name),
+        }
+    }
+
+    fn render_array_bound(&self, value: &ValueExpr) -> Result<String, GeneratorError> {
+        match value {
+            ValueExpr::Number(value) if *value >= 0 => Ok(format!("{}usize", value)),
+            ValueExpr::Number(value) => Err(GeneratorError::UnsupportedConstruct(format!(
+                "negative fixed array bounds are not supported in Rust emission: {value}"
+            ))),
+            ValueExpr::Identifier(name) => {
+                Ok(format!("{} as usize", self.qualify_const_name(name)))
+            }
         }
     }
 }
@@ -810,23 +881,6 @@ fn uses_bytes_in_type_spec(target: &TypeSpec) -> bool {
     }
 }
 
-fn render_value(value: &ValueExpr) -> String {
-    match value {
-        ValueExpr::Number(value) => value.to_string(),
-        ValueExpr::Identifier(name) => name.clone(),
-    }
-}
-
-fn render_array_bound(value: &ValueExpr) -> Result<String, GeneratorError> {
-    match value {
-        ValueExpr::Number(value) if *value >= 0 => Ok(format!("{}usize", value)),
-        ValueExpr::Number(value) => Err(GeneratorError::UnsupportedConstruct(format!(
-            "negative fixed array bounds are not supported in Rust emission: {value}"
-        ))),
-        ValueExpr::Identifier(name) => Ok(format!("{name} as usize")),
-    }
-}
-
 fn union_variant_name(label: &UnionCaseLabel) -> String {
     match label {
         UnionCaseLabel::Case(ValueExpr::Identifier(name)) => to_pascal_case(name),
@@ -873,31 +927,82 @@ fn line(indent: usize, out: &mut String, args: std::fmt::Arguments<'_>) {
 }
 
 fn build_named_types(schema: &Schema) -> BTreeMap<String, NamedType> {
+    build_named_types_for_modules(&[LoadedModule {
+        module_name: "__local".to_string(),
+        path: Default::default(),
+        dependencies: Vec::new(),
+        schema: schema.clone(),
+    }])
+}
+
+fn build_named_types_for_modules(modules: &[LoadedModule]) -> BTreeMap<String, NamedType> {
     let mut named_types = BTreeMap::new();
 
-    for item in &schema.items {
-        match item {
-            Item::Typedef(item) => {
-                named_types.insert(
-                    item.declarator.name.clone(),
-                    NamedType::Typedef {
-                        target: item.target.clone(),
-                        modifier: item.declarator.modifier.clone(),
-                    },
-                );
+    for module in modules {
+        for item in &module.schema.items {
+            match item {
+                Item::Typedef(item) => {
+                    named_types.insert(
+                        item.declarator.name.clone(),
+                        NamedType::Typedef {
+                            target: item.target.clone(),
+                            modifier: item.declarator.modifier.clone(),
+                        },
+                    );
+                }
+                Item::Struct(item) => {
+                    named_types.insert(item.name.clone(), NamedType::Struct(item.body.clone()));
+                }
+                Item::Enum(item) => {
+                    named_types.insert(item.name.clone(), NamedType::Enum);
+                }
+                Item::Union(item) => {
+                    named_types.insert(item.name.clone(), NamedType::Union(item.body.clone()));
+                }
+                Item::Const(_) | Item::Program(_) => {}
             }
-            Item::Struct(item) => {
-                named_types.insert(item.name.clone(), NamedType::Struct(item.body.clone()));
-            }
-            Item::Enum(item) => {
-                named_types.insert(item.name.clone(), NamedType::Enum);
-            }
-            Item::Union(item) => {
-                named_types.insert(item.name.clone(), NamedType::Union(item.body.clone()));
-            }
-            Item::Const(_) | Item::Program(_) => {}
         }
     }
 
     named_types
+}
+
+fn build_type_owners(modules: &[LoadedModule]) -> BTreeMap<String, String> {
+    let mut owners = BTreeMap::new();
+
+    for module in modules {
+        for item in &module.schema.items {
+            match item {
+                Item::Typedef(item) => {
+                    owners.insert(item.declarator.name.clone(), module.module_name.clone());
+                }
+                Item::Struct(item) => {
+                    owners.insert(item.name.clone(), module.module_name.clone());
+                }
+                Item::Enum(item) => {
+                    owners.insert(item.name.clone(), module.module_name.clone());
+                }
+                Item::Union(item) => {
+                    owners.insert(item.name.clone(), module.module_name.clone());
+                }
+                Item::Const(_) | Item::Program(_) => {}
+            }
+        }
+    }
+
+    owners
+}
+
+fn build_const_owners(modules: &[LoadedModule]) -> BTreeMap<String, String> {
+    let mut owners = BTreeMap::new();
+
+    for module in modules {
+        for item in &module.schema.items {
+            if let Item::Const(item) = item {
+                owners.insert(item.name.clone(), module.module_name.clone());
+            }
+        }
+    }
+
+    owners
 }

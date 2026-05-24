@@ -89,6 +89,10 @@ oncrpcgen parse proto.x --emit-ast
 Generate Rust XDR payload types and ONC RPC program/version/procedure constants
 from an `.x` file.
 
+When the input file includes other `.x` files, the generator should emit one
+Rust output module per loaded IDL file rather than flattening every transitive
+declaration into the root file's output.
+
 Examples:
 
 ```bash
@@ -100,6 +104,11 @@ oncrpcgen emit types proto.x --module proto_schema --out-dir generated/
 
 Generate Rust client/server stub code from ONC RPC program/version/procedure
 declarations in an `.x` file.
+
+Each generated stub file should contain only the `program/version/procedure`
+blocks owned by the root input IDL file. Included files may still contribute
+type modules, but they should not produce sibling `.stubs.rs` outputs during a
+normal root-file generation request.
 
 Examples:
 
@@ -118,6 +127,10 @@ By default this means:
 - program/version/procedure constants
 - client stubs
 - server traits and dispatch glue
+
+If the input schema pulls in additional `.x` files through includes, generation
+should emit the reachable sibling Rust type modules needed to represent those
+files as separate outputs in the selected `--out-dir`.
 
 Examples:
 
@@ -171,9 +184,14 @@ supports stdout-only modes.
 
 Specifies the destination directory for generated Rust output.
 
+For include-aware generation, this directory should receive one generated Rust
+type file per loaded IDL module, and stub output only for the root input file
+unless a future explicit option is added to request all transitive stubs.
+
 #### `--module <name>`
 
-Optional override for the generated module name derived from the input file.
+Optional override for the generated module name derived from the root input
+file.
 
 This should be used sparingly. Deterministic schema-derived naming remains the
 default.
@@ -295,10 +313,15 @@ pub struct GenerateOptions {
     pub emit_per_call_auth_overloads: bool,
 }
 
-pub struct GeneratedOutputs {
+pub struct GeneratedModuleOutput {
+    pub module_name: String,
     pub types: Option<String>,
-    pub client: Option<String>,
-    pub server: Option<String>,
+    pub stubs: Option<String>,
+}
+
+pub struct GeneratedOutputs {
+    pub root_module: String,
+    pub modules: Vec<GeneratedModuleOutput>,
 }
 
 pub fn parse_x_file(...) -> Result<Schema, GeneratorError>;
@@ -328,8 +351,14 @@ The implementation may choose either:
 
 but it must do so deterministically.
 
-The first implementation should prefer simpler, explicit output over clever
-file splitting rules.
+The current preferred direction is:
+
+- one Rust output file per loaded `.x` file
+- deterministic sibling module naming derived from each input file stem
+- cross-module Rust references for imported types and constants
+- no inlining of unrelated transitive `program` blocks into the root module
+- no `.stubs.rs` output for included dependency files during default root-file
+  generation
 
 ## Generated Client API
 

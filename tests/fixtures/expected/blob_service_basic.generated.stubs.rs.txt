@@ -1,0 +1,72 @@
+use bytes::Bytes;
+
+pub mod blob_service {
+    pub const PROGRAM: u32 = 200001;
+
+    pub mod blob_service_v1 {
+        pub const VERSION: u32 = 1;
+        pub const BLOB_NULL: u32 = 0;
+        pub const BLOB_COPY: u32 = 1;
+
+        pub struct BLOB_SERVICE_V1Client<T> {
+            client: onc_rpc_runtime::Client<T>,
+        }
+
+        impl<T> BLOB_SERVICE_V1Client<T> where T: onc_rpc_runtime::ClientTransport {
+            pub fn new(client: onc_rpc_runtime::Client<T>) -> Self {
+                Self { client }
+            }
+
+            pub fn blob_null(&self) -> Result<onc_rpc_runtime::CallResponse, onc_rpc_runtime::RuntimeError> {
+                let request = onc_rpc_runtime::CallRequest::new(
+                    onc_rpc_runtime::ProgramVersion { program: super::PROGRAM, version: VERSION },
+                    onc_rpc_runtime::Procedure(BLOB_NULL),
+                    Bytes::new(),
+                );
+                self.client.call(request)
+            }
+
+            pub fn blob_copy(&self, payload: Bytes) -> Result<onc_rpc_runtime::CallResponse, onc_rpc_runtime::RuntimeError> {
+                let request = onc_rpc_runtime::CallRequest::new(
+                    onc_rpc_runtime::ProgramVersion { program: super::PROGRAM, version: VERSION },
+                    onc_rpc_runtime::Procedure(BLOB_COPY),
+                    payload,
+                );
+                self.client.call(request)
+            }
+
+        }
+
+        pub trait BLOB_SERVICE_V1Service {
+            fn blob_null(&self) -> Result<Bytes, onc_rpc_server::DispatchError>;
+            fn blob_copy(&self, payload: Bytes) -> Result<Bytes, onc_rpc_server::DispatchError>;
+        }
+
+        pub struct BLOB_SERVICE_V1Dispatch<T> {
+            inner: T,
+        }
+
+        impl<T> BLOB_SERVICE_V1Dispatch<T> {
+            pub fn new(inner: T) -> Self {
+                Self { inner }
+            }
+        }
+
+        impl<T> onc_rpc_server::Dispatch for BLOB_SERVICE_V1Dispatch<T> where T: BLOB_SERVICE_V1Service + Send + Sync + 'static {
+            fn dispatch(&self, request: onc_rpc_server::RequestContext) -> Result<onc_rpc_server::ResponsePayload, onc_rpc_server::DispatchError> {
+                match request.procedure.0 {
+                    0 => {
+                        self.inner.blob_null().map(onc_rpc_server::ResponsePayload::success)
+                    }
+                    1 => {
+                        self.inner.blob_copy(request.payload).map(onc_rpc_server::ResponsePayload::success)
+                    }
+                    _ => Err(onc_rpc_server::DispatchError::ProcedureUnavailable),
+                }
+            }
+        }
+
+    }
+
+}
+

@@ -1,0 +1,12 @@
+pub type job_update_t = u32;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct instance_info_t {
+    pub source_handle: crate::nfs_support::remote_handle_t,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct job_result_t {
+    pub status: crate::common_types::status_code_t,
+}
+

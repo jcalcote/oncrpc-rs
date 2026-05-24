@@ -1,0 +1,18 @@
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct copy_request_t {
+    pub job_id: crate::common_types::job_id_t,
+    pub job_update: crate::transfer_types::job_update_t,
+    pub source_instance: crate::transfer_types::instance_info_t,
+}
+
+pub mod blob_service {
+    pub const PROGRAM: u32 = 200001;
+
+    pub mod blob_service_v1 {
+        pub const VERSION: u32 = 1;
+        pub const BLOB_NULL: u32 = 0;
+        pub const BLOB_COPY: u32 = 1;
+    }
+
+}
+

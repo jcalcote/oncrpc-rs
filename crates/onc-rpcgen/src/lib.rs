@@ -6,7 +6,9 @@ mod emit;
 mod parser;
 
 pub use ast::*;
-pub use emit::{emit_rust_stubs, emit_rust_types};
+pub use emit::{
+    emit_rust_stubs, emit_rust_stubs_for_module, emit_rust_types, emit_rust_types_for_module,
+};
 
 use std::collections::HashSet;
 use std::fs;
@@ -47,11 +49,31 @@ impl Default for GenerateOptions {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoadedModule {
+    pub module_name: String,
+    pub path: PathBuf,
+    pub dependencies: Vec<String>,
+    pub schema: Schema,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct GeneratedOutputs {
+pub struct LoadedSchemaSet {
+    pub root_module: String,
+    pub modules: Vec<LoadedModule>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GeneratedModuleOutput {
     pub module_name: String,
     pub types: Option<String>,
     pub stubs: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GeneratedOutputs {
+    pub root_module: String,
+    pub modules: Vec<GeneratedModuleOutput>,
 }
 
 pub fn parse_x_file(path: impl AsRef<Path>) -> Result<Schema, GeneratorError> {
@@ -60,11 +82,14 @@ pub fn parse_x_file(path: impl AsRef<Path>) -> Result<Schema, GeneratorError> {
 
 pub fn parse_x_file_with_options(
     path: impl AsRef<Path>,
-    options: &LoadOptions,
+    _options: &LoadOptions,
 ) -> Result<Schema, GeneratorError> {
     let path = path.as_ref();
-    let mut visited = HashSet::new();
-    load_schema_recursive(path, options, &mut visited)
+    let source = fs::read_to_string(path).map_err(|error| GeneratorError::Io {
+        path: path.display().to_string(),
+        message: error.to_string(),
+    })?;
+    parse_x_source(&source)
 }
 
 pub fn parse_x_source(source: &str) -> Result<Schema, GeneratorError> {
@@ -115,12 +140,11 @@ pub fn generate_from_x_file_with_options(
     options: &GenerateOptions,
 ) -> Result<GeneratedOutputs, GeneratorError> {
     let path = path.as_ref();
-    let schema = parse_x_file_with_options(path, load)?;
-    generate_rust(
-        &schema,
-        module_name_for_path(path, options.module_name.as_deref()),
-        options,
-    )
+    let mut loaded = load_module_set_from_x_file_with_options(path, load)?;
+    if let Some(name) = options.module_name.as_deref() {
+        rename_root_module(&mut loaded, sanitize_module_name(name));
+    }
+    generate_rust_module_set(&loaded, options)
 }
 
 pub fn generate_rust(
@@ -128,19 +152,16 @@ pub fn generate_rust(
     module_name: String,
     options: &GenerateOptions,
 ) -> Result<GeneratedOutputs, GeneratorError> {
-    Ok(GeneratedOutputs {
-        module_name,
-        types: if options.emit_types {
-            Some(emit_rust_types(schema)?)
-        } else {
-            None
-        },
-        stubs: if options.emit_stubs {
-            Some(emit_rust_stubs(schema)?)
-        } else {
-            None
-        },
-    })
+    let loaded = LoadedSchemaSet {
+        root_module: module_name.clone(),
+        modules: vec![LoadedModule {
+            module_name,
+            path: PathBuf::new(),
+            dependencies: Vec::new(),
+            schema: schema.clone(),
+        }],
+    };
+    generate_rust_module_set(&loaded, options)
 }
 
 pub fn module_name_for_path(path: &Path, override_name: Option<&str>) -> String {
@@ -159,18 +180,69 @@ pub fn fixture_root() -> &'static str {
     "../../tests/fixtures"
 }
 
-fn load_schema_recursive(
+pub fn load_module_set_from_x_file_with_options(
+    path: &Path,
+    options: &LoadOptions,
+) -> Result<LoadedSchemaSet, GeneratorError> {
+    let mut visited = HashSet::new();
+    let mut modules = Vec::new();
+    let root_path = path.canonicalize().map_err(|error| GeneratorError::Io {
+        path: path.display().to_string(),
+        message: error.to_string(),
+    })?;
+    load_module_set_recursive(&root_path, options, &mut visited, &mut modules)?;
+    Ok(LoadedSchemaSet {
+        root_module: module_name_for_path(&root_path, None),
+        modules,
+    })
+}
+
+pub fn generate_rust_module_set(
+    loaded: &LoadedSchemaSet,
+    options: &GenerateOptions,
+) -> Result<GeneratedOutputs, GeneratorError> {
+    let mut modules = Vec::new();
+
+    for module in &loaded.modules {
+        let types = if options.emit_types {
+            empty_is_none(emit_rust_types_for_module(module, loaded)?)
+        } else {
+            None
+        };
+        let stubs = if options.emit_stubs && module.module_name == loaded.root_module {
+            empty_is_none(emit_rust_stubs_for_module(module)?)
+        } else {
+            None
+        };
+
+        if types.is_some() || stubs.is_some() {
+            modules.push(GeneratedModuleOutput {
+                module_name: module.module_name.clone(),
+                types,
+                stubs,
+            });
+        }
+    }
+
+    Ok(GeneratedOutputs {
+        root_module: loaded.root_module.clone(),
+        modules,
+    })
+}
+
+fn load_module_set_recursive(
     path: &Path,
     options: &LoadOptions,
     visited: &mut HashSet<PathBuf>,
-) -> Result<Schema, GeneratorError> {
+    modules: &mut Vec<LoadedModule>,
+) -> Result<(), GeneratorError> {
     let canonical = path.canonicalize().map_err(|error| GeneratorError::Io {
         path: path.display().to_string(),
         message: error.to_string(),
     })?;
 
     if !visited.insert(canonical.clone()) {
-        return Ok(Schema { items: Vec::new() });
+        return Ok(());
     }
 
     let source = fs::read_to_string(&canonical).map_err(|error| GeneratorError::Io {
@@ -178,7 +250,7 @@ fn load_schema_recursive(
         message: error.to_string(),
     })?;
 
-    let mut merged = Schema { items: Vec::new() };
+    let mut dependencies = Vec::new();
     for include in extract_includes(&source) {
         let include_path = resolve_include(&canonical, &include, options).ok_or_else(|| {
             GeneratorError::IncludeResolution {
@@ -186,13 +258,17 @@ fn load_schema_recursive(
                 include: include.clone(),
             }
         })?;
-        let child = load_schema_recursive(&include_path, options, visited)?;
-        merged.items.extend(child.items);
+        load_module_set_recursive(&include_path, options, visited, modules)?;
+        dependencies.push(module_name_for_path(&include_path, None));
     }
 
-    let current = parse_x_source(&source)?;
-    merged.items.extend(current.items);
-    Ok(merged)
+    modules.push(LoadedModule {
+        module_name: module_name_for_path(&canonical, None),
+        path: canonical,
+        dependencies,
+        schema: parse_x_source(&source)?,
+    });
+    Ok(())
 }
 
 fn extract_includes(source: &str) -> Vec<String> {
@@ -258,4 +334,28 @@ fn sanitize_module_name(name: &str) -> String {
     }
 
     out.trim_matches('_').to_string()
+}
+
+fn empty_is_none(output: String) -> Option<String> {
+    if output.trim().is_empty() {
+        None
+    } else {
+        Some(output)
+    }
+}
+
+fn rename_root_module(loaded: &mut LoadedSchemaSet, new_root_name: String) {
+    let old_root_name = loaded.root_module.clone();
+    loaded.root_module = new_root_name.clone();
+
+    for module in &mut loaded.modules {
+        if module.module_name == old_root_name {
+            module.module_name = new_root_name.clone();
+        }
+        for dependency in &mut module.dependencies {
+            if *dependency == old_root_name {
+                *dependency = new_root_name.clone();
+            }
+        }
+    }
 }

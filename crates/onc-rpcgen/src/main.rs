@@ -1,8 +1,8 @@
 use clap::{Args, Parser, Subcommand};
 use onc_rpcgen::{
-    GenerateOptions, GeneratorError, LoadOptions, emit_rust_stubs_from_x_file_with_options,
-    emit_rust_types_from_x_file_with_options, generate_from_x_file_with_options,
-    module_name_for_path, parse_x_file_with_options,
+    GenerateOptions, GeneratedModuleOutput, GeneratorError, LoadOptions,
+    emit_rust_stubs_for_module, emit_rust_types_for_module, generate_from_x_file_with_options,
+    load_module_set_from_x_file_with_options, parse_x_file_with_options,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -95,25 +95,50 @@ fn run(cli: Cli) -> Result<(), GeneratorError> {
                 let load = to_load_options(&command.input.include_dirs);
                 let schema = parse_x_file_with_options(&command.input.x_file, &load)?;
                 maybe_print_ast(&schema, command.input.emit_ast);
-                let output =
-                    emit_rust_types_from_x_file_with_options(&command.input.x_file, &load)?;
-                let module = module_name_for_path(
-                    &command.input.x_file,
-                    command.input.module_name.as_deref(),
-                );
-                write_output(&command.out_dir, &format!("{module}.types.rs"), &output)
+                let loaded =
+                    load_module_set_from_x_file_with_options(&command.input.x_file, &load)?;
+                let mut outputs = Vec::new();
+                for module in &loaded.modules {
+                    outputs.push(GeneratedModuleOutput {
+                        module_name: module.module_name.clone(),
+                        types: {
+                            let output = emit_rust_types_for_module(module, &loaded)?;
+                            if output.trim().is_empty() {
+                                None
+                            } else {
+                                Some(output)
+                            }
+                        },
+                        stubs: None,
+                    });
+                }
+                write_generated_outputs(&command.out_dir, &outputs)
             }
             EmitKindCommand::Stubs(command) => {
                 let load = to_load_options(&command.input.include_dirs);
                 let schema = parse_x_file_with_options(&command.input.x_file, &load)?;
                 maybe_print_ast(&schema, command.input.emit_ast);
-                let output =
-                    emit_rust_stubs_from_x_file_with_options(&command.input.x_file, &load)?;
-                let module = module_name_for_path(
-                    &command.input.x_file,
-                    command.input.module_name.as_deref(),
-                );
-                write_output(&command.out_dir, &format!("{module}.stubs.rs"), &output)
+                let loaded =
+                    load_module_set_from_x_file_with_options(&command.input.x_file, &load)?;
+                let mut outputs = Vec::new();
+                for module in &loaded.modules {
+                    if module.module_name != loaded.root_module {
+                        continue;
+                    }
+                    outputs.push(GeneratedModuleOutput {
+                        module_name: module.module_name.clone(),
+                        types: None,
+                        stubs: {
+                            let output = emit_rust_stubs_for_module(module)?;
+                            if output.trim().is_empty() {
+                                None
+                            } else {
+                                Some(output)
+                            }
+                        },
+                    });
+                }
+                write_generated_outputs(&command.out_dir, &outputs)
             }
         },
         Command::Generate(command) => {
@@ -129,25 +154,7 @@ fn run(cli: Cli) -> Result<(), GeneratorError> {
                     emit_stubs: !command.no_stubs,
                 },
             )?;
-            fs::create_dir_all(&command.out_dir).map_err(|error| GeneratorError::Io {
-                path: command.out_dir.display().to_string(),
-                message: error.to_string(),
-            })?;
-            if let Some(types) = outputs.types {
-                write_output(
-                    &command.out_dir,
-                    &format!("{}.types.rs", outputs.module_name),
-                    &types,
-                )?;
-            }
-            if let Some(stubs) = outputs.stubs {
-                write_output(
-                    &command.out_dir,
-                    &format!("{}.stubs.rs", outputs.module_name),
-                    &stubs,
-                )?;
-            }
-            Ok(())
+            write_generated_outputs(&command.out_dir, &outputs.modules)
         }
     }
 }
@@ -162,6 +169,27 @@ fn maybe_print_ast(schema: &onc_rpcgen::Schema, emit_ast: bool) {
     if emit_ast {
         print!("{}", schema.render_snapshot());
     }
+}
+
+fn write_generated_outputs(
+    out_dir: &Path,
+    outputs: &[GeneratedModuleOutput],
+) -> Result<(), GeneratorError> {
+    fs::create_dir_all(out_dir).map_err(|error| GeneratorError::Io {
+        path: out_dir.display().to_string(),
+        message: error.to_string(),
+    })?;
+
+    for output in outputs {
+        if let Some(types) = &output.types {
+            write_output(out_dir, &format!("{}.types.rs", output.module_name), types)?;
+        }
+        if let Some(stubs) = &output.stubs {
+            write_output(out_dir, &format!("{}.stubs.rs", output.module_name), stubs)?;
+        }
+    }
+
+    Ok(())
 }
 
 fn write_output(out_dir: &Path, filename: &str, output: &str) -> Result<(), GeneratorError> {

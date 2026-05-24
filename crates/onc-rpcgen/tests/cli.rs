@@ -53,9 +53,16 @@ fn generate_command_writes_types_and_stubs_files() {
         .expect("types output should exist");
     let stubs = fs::read_to_string(temp.path().join("blob_service_basic.stubs.rs"))
         .expect("stubs output should exist");
+    let transfer_types = fs::read_to_string(temp.path().join("transfer_types.types.rs"))
+        .expect("transitive types output should exist");
 
     assert!(types.contains("pub mod blob_service {"));
+    assert!(types.contains("crate::common_types::job_id_t"));
+    assert!(types.contains("crate::transfer_types::job_update_t"));
     assert!(stubs.contains("pub struct BLOB_SERVICE_V1Client<T> {"));
+    assert!(!stubs.contains("nfs_support_program"));
+    assert!(transfer_types.contains("crate::nfs_support::remote_handle_t"));
+    assert!(!temp.path().join("nfs_support.stubs.rs").exists());
 }
 
 #[test]
@@ -91,6 +98,14 @@ fn generate_command_resolves_include_dirs() {
 
     let types =
         fs::read_to_string(out_dir.join("service.types.rs")).expect("types output should exist");
-    assert!(types.contains("pub type handle_id_t = u64;"));
+    let shared_types = fs::read_to_string(out_dir.join("shared_types.types.rs"))
+        .expect("shared types output should exist");
+    let stubs =
+        fs::read_to_string(out_dir.join("service.stubs.rs")).expect("stubs output should exist");
+
+    assert!(shared_types.contains("pub type handle_id_t = u64;"));
     assert!(types.contains("pub struct sample_t {"));
+    assert!(types.contains("crate::shared_types::handle_id_t"));
+    assert!(stubs.contains("pub struct SAMPLE_V1Client<T> {"));
+    assert!(!out_dir.join("shared_types.stubs.rs").exists());
 }
