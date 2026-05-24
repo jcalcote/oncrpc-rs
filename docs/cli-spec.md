@@ -5,34 +5,33 @@
 This document specifies the intended command-line interface and library-facing
 generation contract for `onc-rpcgen`.
 
-It exists to fix the target before implementation spreads across:
+It exists to document the completed synchronous generation contract for:
 
 - CLI option parsing
 - build-system integration
-- generated sync and async client APIs
-- generated server trait and dispatch APIs
-- timeout and per-call auth support
+- generated synchronous client APIs
+- generated synchronous server trait and dispatch APIs
 
 The intent is to keep the Rust design aligned with the feature intent of
-`oncrpc4j-rpcgen` while avoiding Java-specific CLI and object-model baggage.
+`oncrpc4j-rpcgen` for synchronous generation while avoiding Java-specific CLI
+and object-model baggage.
 
 ## Scope
 
-This specification covers:
+This specification covers the current `onc-rpcgen` implementation:
 
 - `oncrpcgen` command structure
 - generator library entry points
 - generation options
 - output structure
-- generated sync and async client shapes
-- generated server trait and dispatch shapes
-- timeout and per-call auth configuration shape
+- generated synchronous client shapes
+- generated synchronous server trait and dispatch shapes
 
 This specification does not yet define:
 
 - exact `build.rs` integration API
-- CLI implementation details such as which argument parser crate to use
-- exact XDR encode/decode trait names
+- asynchronous stub generation
+- timeout/per-call auth generated API variants
 - rpcbind integration
 - TLS-specific generation behavior
 
@@ -42,7 +41,7 @@ This specification does not yet define:
 - Keep generated payload types transport-agnostic where practical.
 - Keep generated stubs explicit and testable.
 - Prefer typed options structs over long generated parameter lists.
-- Prefer Rust-native sync/async API shapes over direct Java callback-style
+- Prefer Rust-native synchronous API shapes over direct Java callback-style
   emulation.
 - Fail closed on unsupported or ambiguous generation inputs.
 
@@ -81,7 +80,7 @@ Examples:
 
 ```bash
 oncrpcgen parse proto.x
-oncrpcgen parse proto.x --emit-ast
+oncrpcgen parse --emit-ast proto.x
 ```
 
 ### `emit types`
@@ -114,7 +113,8 @@ Examples:
 
 ```bash
 oncrpcgen emit stubs proto.x --out-dir generated/
-oncrpcgen emit stubs proto.x --sync --async --timeouts --out-dir generated/
+oncrpcgen emit stubs proto.x --no-client --out-dir generated/
+oncrpcgen emit stubs proto.x --no-server --out-dir generated/
 ```
 
 ### `generate`
@@ -136,7 +136,8 @@ Examples:
 
 ```bash
 oncrpcgen generate proto.x --out-dir generated/
-oncrpcgen generate proto.x --no-server --sync --async --timeouts --out-dir generated/
+oncrpcgen generate proto.x --no-types --out-dir generated/
+oncrpcgen generate proto.x --no-server --verbose --out-dir generated/
 ```
 
 ## CLI Options
@@ -148,14 +149,9 @@ The intended cross-command options are:
 - `--out-dir <dir>`
 - `--module <name>`
 - `--no-types`
+- `--no-stubs`
 - `--no-client`
 - `--no-server`
-- `--parse-only`
-- `--sync`
-- `--async`
-- `--one-way`
-- `--timeouts`
-- `--per-call-auth`
 - `--emit-ast`
 - `--verbose`
 
@@ -202,64 +198,23 @@ Suppress XDR type emission.
 
 Relevant only for `generate`.
 
+#### `--no-stubs`
+
+Suppress stub emission entirely.
+
+Relevant only for `generate`.
+
 #### `--no-client`
 
-Suppress client stub generation.
+Suppress synchronous client stub generation.
 
 Relevant for `emit stubs` and `generate`.
 
 #### `--no-server`
 
-Suppress server stub/trait/dispatch generation.
+Suppress synchronous server trait/dispatch generation.
 
 Relevant for `emit stubs` and `generate`.
-
-#### `--parse-only`
-
-Parse and validate the input schema without writing generated output.
-
-This is equivalent in intent to `oncrpc4j-rpcgen`'s `-parseonly`.
-
-#### `--sync`
-
-Generate synchronous client and server-facing APIs.
-
-If neither `--sync` nor `--async` is specified, the default should be:
-
-- generate sync APIs
-- do not generate async APIs yet unless the implementation explicitly decides
-  the default includes both
-
-The project should choose one default and document it consistently.
-
-#### `--async`
-
-Generate asynchronous client and server-facing APIs.
-
-This should mean Rust-native async support, not Java callback-style support.
-
-#### `--one-way`
-
-Generate one-way client methods for procedures where the runtime contract
-supports fire-and-forget semantics.
-
-This option must not silently change semantics for procedures that require a
-reply to preserve protocol correctness.
-
-#### `--timeouts`
-
-Generate options-bearing method variants that accept timeout configuration.
-
-This should not explode default generated signatures by appending timeout
-parameters everywhere.
-
-#### `--per-call-auth`
-
-Generate options-bearing method variants that accept per-call authentication
-overrides.
-
-As with timeout support, this should be represented via a typed options
-struct, not via long positional parameter lists.
 
 #### `--emit-ast`
 
@@ -304,13 +259,9 @@ The intended library-facing generation contract is:
 pub struct GenerateOptions {
     pub module_name: Option<String>,
     pub emit_types: bool,
+    pub emit_stubs: bool,
     pub emit_client: bool,
     pub emit_server: bool,
-    pub emit_sync: bool,
-    pub emit_async: bool,
-    pub emit_one_way: bool,
-    pub emit_timeout_overloads: bool,
-    pub emit_per_call_auth_overloads: bool,
 }
 
 pub struct GeneratedModuleOutput {
@@ -334,7 +285,7 @@ The exact names may still evolve, but the shape should remain:
 
 - parse API
 - focused emit APIs
-- one higher-level generation API with explicit options
+- one higher-level generation API with explicit synchronous-generation options
 
 ## Output Layout
 
@@ -362,96 +313,25 @@ The current preferred direction is:
 
 ## Generated Client API
 
-The client generation contract should support three layers.
-
-### 1. Raw Client Methods
-
-These expose the lower-level runtime call boundary.
-
-Examples:
-
-```rust
-pub fn proc_raw(&self, payload: Bytes) -> Result<CallResponse, RuntimeError>;
-pub async fn proc_raw_async(&self, payload: Bytes) -> Result<CallResponse, RuntimeError>;
-```
-
-Raw methods are primarily useful for:
-
-- debugging
-- transitional integration
-- advanced consumers that want full control over payload marshalling
-
-### 2. Typed Client Methods
-
-These are the default ergonomic client surface.
+The current client generation contract is typed and synchronous.
 
 Examples:
 
 ```rust
 pub fn proc(&self, arg: Arg) -> Result<Ret, RuntimeError>;
-pub async fn proc_async(&self, arg: Arg) -> Result<Ret, RuntimeError>;
-```
-
-For `void` argument procedures:
-
-```rust
 pub fn proc(&self) -> Result<Ret, RuntimeError>;
-pub async fn proc_async(&self) -> Result<Ret, RuntimeError>;
-```
-
-For `void` return procedures:
-
-```rust
 pub fn proc(&self, arg: Arg) -> Result<(), RuntimeError>;
 ```
 
-### 3. Options-Bearing Client Methods
-
-These provide timeout and per-call auth support without cluttering the default
-method signatures.
-
-Examples:
-
-```rust
-pub fn proc_with(&self, arg: Arg, options: CallOptions) -> Result<Ret, RuntimeError>;
-pub async fn proc_with_async(
-    &self,
-    arg: Arg,
-    options: CallOptions,
-) -> Result<Ret, RuntimeError>;
-```
-
-The default methods should delegate to these using client defaults.
-
-## Call Options
-
-Timeout and per-call auth support should be represented through a typed options
-struct in the runtime layer.
-
-Intended shape:
-
-```rust
-pub struct CallOptions {
-    pub timeout: Option<Duration>,
-    pub auth: Option<OpaqueAuth>,
-}
-```
-
-This is the Rust replacement for Java-style generated method overloads with
-extra positional timeout and auth parameters.
-
-`CallOptions` belongs in the runtime contract, not inside generated schema
-modules.
+Generated client methods must marshal arguments and replies through
+`onc_rpc_xdr::XdrEncode` and `onc_rpc_xdr::XdrDecode`.
 
 ## Generated Server API
 
-Server generation should produce:
+Server generation currently produces:
 
-- typed service traits
-- optional async service traits
+- typed synchronous service traits
 - dispatch adapters targeting `onc-rpc-server::Dispatch`
-
-### Typed Sync Service Trait
 
 Example:
 
@@ -462,88 +342,18 @@ pub trait BlobServiceV1Service {
 }
 ```
 
-### Typed Async Service Trait
+Generated dispatch glue must:
 
-Example intent:
-
-```rust
-pub trait BlobServiceV1AsyncService {
-    async fn blob_null(&self) -> Result<(), DispatchError>;
-    async fn blob_copy(
-        &self,
-        arg: copy_request_t,
-    ) -> Result<job_result_t, DispatchError>;
-}
-```
-
-The exact async-trait strategy may depend on language and crate choices, but
-the generated contract should still target a clearly async service surface.
-
-### Dispatch Adapter
-
-Generated dispatch glue should:
-
-- decode typed arguments from raw payload bytes
+- decode typed arguments from request payload bytes
 - invoke the typed service trait
 - encode typed results into reply payload bytes
-- map missing procedures and decoding failures into explicit dispatch errors
-
-The adapter should remain thin and deterministic.
-
-## Sync and Async Generation Policy
-
-The generator should support:
-
-- sync-only output
-- async-only output
-- combined sync and async output
-
-The chosen default must be documented once implementation lands.
-
-Until then, the generator contract should not assume that async support implies
-callback-style APIs.
-
-The preferred Rust async surface is:
-
-- `async fn`-style generated methods
-- future-returning methods only if required by the surrounding runtime design
-
-Callback-style async generation may be added later, but it should not be the
-primary async contract.
-
-## One-Way Generation Policy
-
-If one-way support is enabled:
-
-- one-way methods must be named distinctly or be otherwise unambiguous
-- procedures that semantically require replies must not be silently downgraded
-- runtime support must define what transport-level success means for a one-way
-  call
-
-If the runtime cannot faithfully support one-way semantics yet, generation
-must fail closed rather than emit misleading APIs.
-
-## Timeout Generation Policy
-
-Timeout support should generate options-bearing method variants, not duplicate
-every method into many positional-parameter forms.
-
-This keeps the Rust API compact and readable while still exposing timeout
-control where needed.
-
-## Per-Call Auth Generation Policy
-
-Per-call auth support follows the same rule as timeout support:
-
-- default methods use client-level defaults
-- `_with(...)` variants accept `CallOptions`
-- generated code must not require per-call auth parameters everywhere
+- map malformed payloads to `DispatchError::GarbageArgs`
+- map reply encoding failures to `DispatchError::SystemError`
 
 ## Error Policy
 
 The generator must fail closed when:
 
-- requested sync/async/one-way modes are not supported by the runtime contract
 - typed marshalling cannot be emitted for a recognized XDR construct
 - generation would require unresolved cross-file references
 - naming would collide without a documented conflict-resolution policy
@@ -553,11 +363,9 @@ The generator must fail closed when:
 This design intentionally preserves the useful feature intent from
 `oncrpc4j-rpcgen`:
 
-- parse-only mode
 - client/server generation toggles
-- sync/async generation
-- timeout support
-- per-call auth support
+- deterministic code generation from `.x` inputs
+- separate type and stub emission
 
 It intentionally does not preserve Java-specific choices such as:
 

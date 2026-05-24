@@ -7,7 +7,8 @@ mod parser;
 
 pub use ast::*;
 pub use emit::{
-    emit_rust_stubs, emit_rust_stubs_for_module, emit_rust_types, emit_rust_types_for_module,
+    emit_rust_stubs, emit_rust_stubs_for_module, emit_rust_stubs_for_module_with_options,
+    emit_rust_stubs_with_options, emit_rust_types, emit_rust_types_for_module,
 };
 
 use std::collections::HashSet;
@@ -37,6 +38,8 @@ pub struct GenerateOptions {
     pub module_name: Option<String>,
     pub emit_types: bool,
     pub emit_stubs: bool,
+    pub emit_client: bool,
+    pub emit_server: bool,
 }
 
 impl Default for GenerateOptions {
@@ -45,6 +48,8 @@ impl Default for GenerateOptions {
             module_name: None,
             emit_types: true,
             emit_stubs: true,
+            emit_client: true,
+            emit_server: true,
         }
     }
 }
@@ -210,7 +215,12 @@ pub fn generate_rust_module_set(
             None
         };
         let stubs = if options.emit_stubs && module.module_name == loaded.root_module {
-            empty_is_none(emit_rust_stubs_for_module(module, loaded)?)
+            empty_is_none(emit_rust_stubs_for_module_with_options(
+                module,
+                loaded,
+                options.emit_client,
+                options.emit_server,
+            )?)
         } else {
             None
         };

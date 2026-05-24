@@ -1,8 +1,9 @@
 use clap::{Args, Parser, Subcommand};
 use onc_rpcgen::{
     GenerateOptions, GeneratedModuleOutput, GeneratorError, LoadOptions,
-    emit_rust_stubs_for_module, emit_rust_types_for_module, generate_from_x_file_with_options,
-    load_module_set_from_x_file_with_options, parse_x_file_with_options,
+    emit_rust_stubs_for_module_with_options, emit_rust_types_for_module,
+    generate_from_x_file_with_options, load_module_set_from_x_file_with_options,
+    parse_x_file_with_options,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -57,6 +58,12 @@ struct FileEmitCommand {
     input: CommonInput,
     #[arg(long = "out-dir")]
     out_dir: PathBuf,
+    #[arg(long = "no-client")]
+    no_client: bool,
+    #[arg(long = "no-server")]
+    no_server: bool,
+    #[arg(long = "verbose")]
+    verbose: bool,
 }
 
 #[derive(Debug, Args)]
@@ -69,6 +76,12 @@ struct GenerateCommand {
     no_types: bool,
     #[arg(long = "no-stubs")]
     no_stubs: bool,
+    #[arg(long = "no-client")]
+    no_client: bool,
+    #[arg(long = "no-server")]
+    no_server: bool,
+    #[arg(long = "verbose")]
+    verbose: bool,
 }
 
 fn main() {
@@ -112,7 +125,7 @@ fn run(cli: Cli) -> Result<(), GeneratorError> {
                         stubs: None,
                     });
                 }
-                write_generated_outputs(&command.out_dir, &outputs)
+                write_generated_outputs(&command.out_dir, &outputs, command.verbose)
             }
             EmitKindCommand::Stubs(command) => {
                 let load = to_load_options(&command.input.include_dirs);
@@ -129,7 +142,12 @@ fn run(cli: Cli) -> Result<(), GeneratorError> {
                         module_name: module.module_name.clone(),
                         types: None,
                         stubs: {
-                            let output = emit_rust_stubs_for_module(module, &loaded)?;
+                            let output = emit_rust_stubs_for_module_with_options(
+                                module,
+                                &loaded,
+                                !command.no_client,
+                                !command.no_server,
+                            )?;
                             if output.trim().is_empty() {
                                 None
                             } else {
@@ -138,7 +156,7 @@ fn run(cli: Cli) -> Result<(), GeneratorError> {
                         },
                     });
                 }
-                write_generated_outputs(&command.out_dir, &outputs)
+                write_generated_outputs(&command.out_dir, &outputs, command.verbose)
             }
         },
         Command::Generate(command) => {
@@ -152,9 +170,11 @@ fn run(cli: Cli) -> Result<(), GeneratorError> {
                     module_name: command.input.module_name.clone(),
                     emit_types: !command.no_types,
                     emit_stubs: !command.no_stubs,
+                    emit_client: !command.no_client,
+                    emit_server: !command.no_server,
                 },
             )?;
-            write_generated_outputs(&command.out_dir, &outputs.modules)
+            write_generated_outputs(&command.out_dir, &outputs.modules, command.verbose)
         }
     }
 }
@@ -174,6 +194,7 @@ fn maybe_print_ast(schema: &onc_rpcgen::Schema, emit_ast: bool) {
 fn write_generated_outputs(
     out_dir: &Path,
     outputs: &[GeneratedModuleOutput],
+    verbose: bool,
 ) -> Result<(), GeneratorError> {
     fs::create_dir_all(out_dir).map_err(|error| GeneratorError::Io {
         path: out_dir.display().to_string(),
@@ -182,17 +203,32 @@ fn write_generated_outputs(
 
     for output in outputs {
         if let Some(types) = &output.types {
-            write_output(out_dir, &format!("{}.types.rs", output.module_name), types)?;
+            write_output(
+                out_dir,
+                &format!("{}.types.rs", output.module_name),
+                types,
+                verbose,
+            )?;
         }
         if let Some(stubs) = &output.stubs {
-            write_output(out_dir, &format!("{}.stubs.rs", output.module_name), stubs)?;
+            write_output(
+                out_dir,
+                &format!("{}.stubs.rs", output.module_name),
+                stubs,
+                verbose,
+            )?;
         }
     }
 
     Ok(())
 }
 
-fn write_output(out_dir: &Path, filename: &str, output: &str) -> Result<(), GeneratorError> {
+fn write_output(
+    out_dir: &Path,
+    filename: &str,
+    output: &str,
+    verbose: bool,
+) -> Result<(), GeneratorError> {
     fs::create_dir_all(out_dir).map_err(|error| GeneratorError::Io {
         path: out_dir.display().to_string(),
         message: error.to_string(),
@@ -202,5 +238,8 @@ fn write_output(out_dir: &Path, filename: &str, output: &str) -> Result<(), Gene
         path: path.display().to_string(),
         message: error.to_string(),
     })?;
+    if verbose {
+        println!("wrote {}", path.display());
+    }
     Ok(())
 }

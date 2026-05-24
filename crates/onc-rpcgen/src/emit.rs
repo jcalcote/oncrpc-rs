@@ -23,7 +23,17 @@ pub fn emit_rust_types_for_module(
 }
 
 pub fn emit_rust_stubs(schema: &Schema) -> Result<String, GeneratorError> {
-    let mut emitter = StubEmitter::new(schema);
+    let mut emitter = StubEmitter::new(schema, true, true);
+    emitter.emit_schema(schema)?;
+    Ok(emitter.out)
+}
+
+pub fn emit_rust_stubs_with_options(
+    schema: &Schema,
+    emit_client: bool,
+    emit_server: bool,
+) -> Result<String, GeneratorError> {
+    let mut emitter = StubEmitter::new(schema, emit_client, emit_server);
     emitter.emit_schema(schema)?;
     Ok(emitter.out)
 }
@@ -32,7 +42,18 @@ pub fn emit_rust_stubs_for_module(
     module: &LoadedModule,
     loaded: &LoadedSchemaSet,
 ) -> Result<String, GeneratorError> {
-    let mut emitter = StubEmitter::new_for_module(module, loaded);
+    let mut emitter = StubEmitter::new_for_module(module, loaded, true, true);
+    emitter.emit_schema(&module.schema)?;
+    Ok(emitter.out)
+}
+
+pub fn emit_rust_stubs_for_module_with_options(
+    module: &LoadedModule,
+    loaded: &LoadedSchemaSet,
+    emit_client: bool,
+    emit_server: bool,
+) -> Result<String, GeneratorError> {
+    let mut emitter = StubEmitter::new_for_module(module, loaded, emit_client, emit_server);
     emitter.emit_schema(&module.schema)?;
     Ok(emitter.out)
 }
@@ -41,10 +62,12 @@ struct StubEmitter {
     out: String,
     current_module: Option<String>,
     type_owners: BTreeMap<String, String>,
+    emit_client: bool,
+    emit_server: bool,
 }
 
 impl StubEmitter {
-    fn new(schema: &Schema) -> Self {
+    fn new(schema: &Schema, emit_client: bool, emit_server: bool) -> Self {
         Self {
             out: String::new(),
             current_module: None,
@@ -54,14 +77,23 @@ impl StubEmitter {
                 dependencies: Vec::new(),
                 schema: schema.clone(),
             }]),
+            emit_client,
+            emit_server,
         }
     }
 
-    fn new_for_module(module: &LoadedModule, loaded: &LoadedSchemaSet) -> Self {
+    fn new_for_module(
+        module: &LoadedModule,
+        loaded: &LoadedSchemaSet,
+        emit_client: bool,
+        emit_server: bool,
+    ) -> Self {
         Self {
             out: String::new(),
             current_module: Some(module.module_name.clone()),
             type_owners: build_type_owners(&loaded.modules),
+            emit_client,
+            emit_server,
         }
     }
 
@@ -122,114 +154,124 @@ impl StubEmitter {
         }
         self.out.push('\n');
 
-        line(
-            indent + 4,
-            &mut self.out,
-            format_args!("pub struct {}<T> {{", client_name),
-        );
-        line(
-            indent + 8,
-            &mut self.out,
-            format_args!("client: onc_rpc_runtime::Client<T>,"),
-        );
-        line(indent + 4, &mut self.out, format_args!("}}"));
-        self.out.push('\n');
+        if self.emit_client {
+            line(indent + 4, &mut self.out, format_args!("pub mod client {{"));
+            line(
+                indent + 8,
+                &mut self.out,
+                format_args!("pub struct {}<T> {{", client_name),
+            );
+            line(
+                indent + 12,
+                &mut self.out,
+                format_args!("client: onc_rpc_runtime::Client<T>,"),
+            );
+            line(indent + 8, &mut self.out, format_args!("}}"));
+            self.out.push('\n');
 
-        line(
-            indent + 4,
-            &mut self.out,
-            format_args!(
-                "impl<T> {}<T> where T: onc_rpc_runtime::ClientTransport {{",
-                client_name
-            ),
-        );
-        line(
-            indent + 8,
-            &mut self.out,
-            format_args!("pub fn new(client: onc_rpc_runtime::Client<T>) -> Self {{"),
-        );
-        line(
-            indent + 12,
-            &mut self.out,
-            format_args!("Self {{ client }}"),
-        );
-        line(indent + 8, &mut self.out, format_args!("}}"));
-        self.out.push('\n');
+            line(
+                indent + 8,
+                &mut self.out,
+                format_args!(
+                    "impl<T> {}<T> where T: onc_rpc_runtime::ClientTransport {{",
+                    client_name
+                ),
+            );
+            line(
+                indent + 12,
+                &mut self.out,
+                format_args!("pub fn new(client: onc_rpc_runtime::Client<T>) -> Self {{"),
+            );
+            line(
+                indent + 16,
+                &mut self.out,
+                format_args!("Self {{ client }}"),
+            );
+            line(indent + 12, &mut self.out, format_args!("}}"));
+            self.out.push('\n');
 
-        for procedure in &version.procedures {
-            self.emit_client_method(procedure, indent + 8)?;
+            for procedure in &version.procedures {
+                self.emit_client_method(procedure, indent + 12)?;
+            }
+
+            line(indent + 8, &mut self.out, format_args!("}}"));
+            self.out.push('\n');
+            line(indent + 4, &mut self.out, format_args!("}}"));
+            self.out.push('\n');
         }
 
-        line(indent + 4, &mut self.out, format_args!("}}"));
-        self.out.push('\n');
+        if self.emit_server {
+            line(indent + 4, &mut self.out, format_args!("pub mod server {{"));
+            line(
+                indent + 8,
+                &mut self.out,
+                format_args!("pub trait {} {{", service_name),
+            );
+            for procedure in &version.procedures {
+                self.emit_service_method(procedure, indent + 12)?;
+            }
+            line(indent + 8, &mut self.out, format_args!("}}"));
+            self.out.push('\n');
 
-        line(
-            indent + 4,
-            &mut self.out,
-            format_args!("pub trait {} {{", service_name),
-        );
-        for procedure in &version.procedures {
-            self.emit_service_method(procedure, indent + 8)?;
+            line(
+                indent + 8,
+                &mut self.out,
+                format_args!("pub struct {}<T> {{", dispatch_name),
+            );
+            line(indent + 12, &mut self.out, format_args!("inner: T,"));
+            line(indent + 8, &mut self.out, format_args!("}}"));
+            self.out.push('\n');
+
+            line(
+                indent + 8,
+                &mut self.out,
+                format_args!("impl<T> {}<T> {{", dispatch_name),
+            );
+            line(
+                indent + 12,
+                &mut self.out,
+                format_args!("pub fn new(inner: T) -> Self {{"),
+            );
+            line(indent + 16, &mut self.out, format_args!("Self {{ inner }}"));
+            line(indent + 12, &mut self.out, format_args!("}}"));
+            line(indent + 8, &mut self.out, format_args!("}}"));
+            self.out.push('\n');
+
+            line(
+                indent + 8,
+                &mut self.out,
+                format_args!(
+                    "impl<T> onc_rpc_server::Dispatch for {}<T> where T: {} + Send + Sync + 'static {{",
+                    dispatch_name, service_name
+                ),
+            );
+            line(
+                indent + 12,
+                &mut self.out,
+                format_args!(
+                    "fn dispatch(&self, request: onc_rpc_server::RequestContext) -> Result<onc_rpc_server::ResponsePayload, onc_rpc_server::DispatchError> {{"
+                ),
+            );
+            line(
+                indent + 16,
+                &mut self.out,
+                format_args!("match request.procedure.0 {{"),
+            );
+            for procedure in &version.procedures {
+                self.emit_dispatch_arm(procedure, indent + 20)?;
+            }
+            line(
+                indent + 20,
+                &mut self.out,
+                format_args!("_ => Err(onc_rpc_server::DispatchError::ProcedureUnavailable),"),
+            );
+            line(indent + 16, &mut self.out, format_args!("}}"));
+            line(indent + 12, &mut self.out, format_args!("}}"));
+            line(indent + 8, &mut self.out, format_args!("}}"));
+            self.out.push('\n');
+            line(indent + 4, &mut self.out, format_args!("}}"));
+            self.out.push('\n');
         }
-        line(indent + 4, &mut self.out, format_args!("}}"));
-        self.out.push('\n');
-
-        line(
-            indent + 4,
-            &mut self.out,
-            format_args!("pub struct {}<T> {{", dispatch_name),
-        );
-        line(indent + 8, &mut self.out, format_args!("inner: T,"));
-        line(indent + 4, &mut self.out, format_args!("}}"));
-        self.out.push('\n');
-
-        line(
-            indent + 4,
-            &mut self.out,
-            format_args!("impl<T> {}<T> {{", dispatch_name),
-        );
-        line(
-            indent + 8,
-            &mut self.out,
-            format_args!("pub fn new(inner: T) -> Self {{"),
-        );
-        line(indent + 12, &mut self.out, format_args!("Self {{ inner }}"));
-        line(indent + 8, &mut self.out, format_args!("}}"));
-        line(indent + 4, &mut self.out, format_args!("}}"));
-        self.out.push('\n');
-
-        line(
-            indent + 4,
-            &mut self.out,
-            format_args!(
-                "impl<T> onc_rpc_server::Dispatch for {}<T> where T: {} + Send + Sync + 'static {{",
-                dispatch_name, service_name
-            ),
-        );
-        line(
-            indent + 8,
-            &mut self.out,
-            format_args!(
-                "fn dispatch(&self, request: onc_rpc_server::RequestContext) -> Result<onc_rpc_server::ResponsePayload, onc_rpc_server::DispatchError> {{"
-            ),
-        );
-        line(
-            indent + 12,
-            &mut self.out,
-            format_args!("match request.procedure.0 {{"),
-        );
-        for procedure in &version.procedures {
-            self.emit_dispatch_arm(procedure, indent + 16)?;
-        }
-        line(
-            indent + 16,
-            &mut self.out,
-            format_args!("_ => Err(onc_rpc_server::DispatchError::ProcedureUnavailable),"),
-        );
-        line(indent + 12, &mut self.out, format_args!("}}"));
-        line(indent + 8, &mut self.out, format_args!("}}"));
-        line(indent + 4, &mut self.out, format_args!("}}"));
-        self.out.push('\n');
 
         line(indent, &mut self.out, format_args!("}}"));
         self.out.push('\n');
@@ -272,13 +314,13 @@ impl StubEmitter {
                 indent + 8,
                 &mut self.out,
                 format_args!(
-                    "onc_rpc_runtime::ProgramVersion {{ program: super::PROGRAM, version: VERSION }},"
+                    "onc_rpc_runtime::ProgramVersion {{ program: super::super::PROGRAM, version: super::VERSION }},"
                 ),
             );
             line(
                 indent + 8,
                 &mut self.out,
-                format_args!("onc_rpc_runtime::Procedure({}),", procedure.name),
+                format_args!("onc_rpc_runtime::Procedure(super::{}),", procedure.name),
             );
             line(indent + 8, &mut self.out, format_args!("&(),"));
             line(indent + 4, &mut self.out, format_args!(")"));
@@ -300,13 +342,13 @@ impl StubEmitter {
                 indent + 8,
                 &mut self.out,
                 format_args!(
-                    "onc_rpc_runtime::ProgramVersion {{ program: super::PROGRAM, version: VERSION }},"
+                    "onc_rpc_runtime::ProgramVersion {{ program: super::super::PROGRAM, version: super::VERSION }},"
                 ),
             );
             line(
                 indent + 8,
                 &mut self.out,
-                format_args!("onc_rpc_runtime::Procedure({}),", procedure.name),
+                format_args!("onc_rpc_runtime::Procedure(super::{}),", procedure.name),
             );
             line(indent + 8, &mut self.out, format_args!("&argument,"));
             line(indent + 4, &mut self.out, format_args!(")"));
@@ -576,7 +618,7 @@ impl TypeEmitter {
         line(
             indent,
             &mut self.out,
-            format_args!("pub const {}: i64 = {};", item.name, value),
+            format_args!("pub const {}: i64 = {};", rust_ident(&item.name), value),
         );
         self.out.push('\n');
         Ok(())
@@ -605,7 +647,11 @@ impl TypeEmitter {
                 line(
                     indent,
                     &mut self.out,
-                    format_args!("pub type {} = {};", item.declarator.name, rust_type),
+                    format_args!(
+                        "pub type {} = {};",
+                        rust_ident(&item.declarator.name),
+                        rust_type
+                    ),
                 );
                 self.out.push('\n');
                 Ok(())
@@ -622,7 +668,11 @@ impl TypeEmitter {
                 line(
                     indent,
                     &mut self.out,
-                    format_args!("pub type {} = {};", item.declarator.name, rust_type),
+                    format_args!(
+                        "pub type {} = {};",
+                        rust_ident(&item.declarator.name),
+                        rust_type
+                    ),
                 );
                 self.out.push('\n');
                 Ok(())
@@ -639,7 +689,11 @@ impl TypeEmitter {
                 line(
                     indent,
                     &mut self.out,
-                    format_args!("pub type {} = {};", item.declarator.name, rust_type),
+                    format_args!(
+                        "pub type {} = {};",
+                        rust_ident(&item.declarator.name),
+                        rust_type
+                    ),
                 );
                 self.out.push('\n');
                 Ok(())
@@ -654,7 +708,11 @@ impl TypeEmitter {
                 line(
                     indent,
                     &mut self.out,
-                    format_args!("pub type {} = {};", item.declarator.name, rust_type),
+                    format_args!(
+                        "pub type {} = {};",
+                        rust_ident(&item.declarator.name),
+                        rust_type
+                    ),
                 );
                 self.out.push('\n');
                 Ok(())
@@ -699,7 +757,11 @@ impl TypeEmitter {
             line(
                 indent + 4,
                 &mut self.out,
-                format_args!("pub {}: {},", declaration.declarator.name, rust_type),
+                format_args!(
+                    "pub {}: {},",
+                    rust_ident(&declaration.declarator.name),
+                    rust_type
+                ),
             );
         }
         line(indent, &mut self.out, format_args!("}}"));
@@ -792,7 +854,11 @@ impl TypeEmitter {
                         line(
                             indent + 8,
                             &mut self.out,
-                            format_args!("{}: {},", arm.declaration.declarator.name, rust_type),
+                            format_args!(
+                                "{}: {},",
+                                rust_ident(&arm.declaration.declarator.name),
+                                rust_type
+                            ),
                         );
                     }
                     line(indent + 4, &mut self.out, format_args!("}},"));
@@ -807,7 +873,11 @@ impl TypeEmitter {
                     line(
                         indent + 8,
                         &mut self.out,
-                        format_args!("{}: {},", arm.declaration.declarator.name, rust_type),
+                        format_args!(
+                            "{}: {},",
+                            rust_ident(&arm.declaration.declarator.name),
+                            rust_type
+                        ),
                     );
                     line(indent + 4, &mut self.out, format_args!("}},"));
                 }
@@ -1071,10 +1141,11 @@ impl TypeEmitter {
             ),
         );
         for declaration in &body.declarations {
+            let field_name = rust_ident(&declaration.declarator.name);
             self.emit_encode_declaration(
                 &declaration.type_spec,
                 &declaration.declarator,
-                &format!("self.{}", declaration.declarator.name),
+                &format!("self.{field_name}"),
                 indent + 8,
             )?;
         }
@@ -1107,7 +1178,7 @@ impl TypeEmitter {
             line(
                 indent + 12,
                 &mut self.out,
-                format_args!("{}: {},", declaration.declarator.name, decode),
+                format_args!("{}: {},", rust_ident(&declaration.declarator.name), decode),
             );
         }
         line(indent + 8, &mut self.out, format_args!("}})"));
@@ -1205,7 +1276,7 @@ impl TypeEmitter {
             )?;
             for label in &arm.labels {
                 let variant_name = union_variant_name(label);
-                let disc = self.render_union_label(label);
+                let disc = self.render_union_label(label, &body.discriminant.type_spec);
                 if matches!(label, UnionCaseLabel::Default) {
                     if rust_type == "()" {
                         line(
@@ -1224,7 +1295,8 @@ impl TypeEmitter {
                             &mut self.out,
                             format_args!(
                                 "Self::{} {{ discriminant, {} }} => {{",
-                                variant_name, arm.declaration.declarator.name
+                                variant_name,
+                                rust_ident(&arm.declaration.declarator.name)
                             ),
                         );
                         line(
@@ -1235,7 +1307,7 @@ impl TypeEmitter {
                         self.emit_encode_declaration(
                             &arm.declaration.type_spec,
                             &arm.declaration.declarator,
-                            arm.declaration.declarator.name.as_str(),
+                            rust_ident(&arm.declaration.declarator.name).as_str(),
                             indent + 16,
                         )?;
                     }
@@ -1256,7 +1328,8 @@ impl TypeEmitter {
                         &mut self.out,
                         format_args!(
                             "Self::{} {{ {} }} => {{",
-                            variant_name, arm.declaration.declarator.name
+                            variant_name,
+                            rust_ident(&arm.declaration.declarator.name)
                         ),
                     );
                     line(
@@ -1267,7 +1340,7 @@ impl TypeEmitter {
                     self.emit_encode_declaration(
                         &arm.declaration.type_spec,
                         &arm.declaration.declarator,
-                        arm.declaration.declarator.name.as_str(),
+                        rust_ident(&arm.declaration.declarator.name).as_str(),
                         indent + 16,
                     )?;
                 }
@@ -1321,7 +1394,7 @@ impl TypeEmitter {
                 continue;
             }
             for label in &arm.labels {
-                let disc = self.render_union_label(label);
+                let disc = self.render_union_label(label, &body.discriminant.type_spec);
                 let variant_name = union_variant_name(label);
                 if rust_type == "()" {
                     line(
@@ -1341,7 +1414,10 @@ impl TypeEmitter {
                         &mut self.out,
                         format_args!(
                             "{} => Ok(Self::{} {{ {}: {} }}),",
-                            disc, variant_name, arm.declaration.declarator.name, decode
+                            disc,
+                            variant_name,
+                            rust_ident(&arm.declaration.declarator.name),
+                            decode
                         ),
                     );
                 }
@@ -1377,7 +1453,8 @@ impl TypeEmitter {
                     &mut self.out,
                     format_args!(
                         "discriminant => Ok(Self::Default {{ discriminant, {}: {} }}),",
-                        default_arm.declaration.declarator.name, decode
+                        rust_ident(&default_arm.declaration.declarator.name),
+                        decode
                     ),
                 );
             }
@@ -1495,10 +1572,41 @@ impl TypeEmitter {
         }
     }
 
-    fn render_union_label(&self, label: &UnionCaseLabel) -> String {
+    fn render_union_label(&self, label: &UnionCaseLabel, discriminant_type: &TypeSpec) -> String {
         match label {
+            UnionCaseLabel::Case(ValueExpr::Identifier(name))
+                if matches!(discriminant_type, TypeSpec::Bool) && name == "TRUE" =>
+            {
+                "true".to_string()
+            }
+            UnionCaseLabel::Case(ValueExpr::Identifier(name))
+                if matches!(discriminant_type, TypeSpec::Bool) && name == "FALSE" =>
+            {
+                "false".to_string()
+            }
+            UnionCaseLabel::Case(ValueExpr::Identifier(name)) => {
+                if let Some(enum_name) = self.enum_type_name_for(discriminant_type) {
+                    format!(
+                        "{}::{}",
+                        self.qualify_type_name(enum_name),
+                        rust_ident(name)
+                    )
+                } else {
+                    self.render_value(&ValueExpr::Identifier(name.clone()))
+                }
+            }
             UnionCaseLabel::Case(value) => self.render_value(value),
             UnionCaseLabel::Default => "discriminant".to_string(),
+        }
+    }
+
+    fn enum_type_name_for<'a>(&'a self, discriminant_type: &'a TypeSpec) -> Option<&'a str> {
+        match discriminant_type {
+            TypeSpec::Identifier(name) => match self.named_types.get(name) {
+                Some(NamedType::Enum) => Some(name.as_str()),
+                _ => None,
+            },
+            _ => None,
         }
     }
 }
@@ -1619,6 +1727,57 @@ fn to_pascal_case(input: &str) -> String {
     } else {
         out
     }
+}
+
+fn rust_ident(input: &str) -> String {
+    if is_rust_keyword(input) {
+        format!("r#{input}")
+    } else {
+        input.to_string()
+    }
+}
+
+fn is_rust_keyword(input: &str) -> bool {
+    matches!(
+        input,
+        "as" | "break"
+            | "const"
+            | "continue"
+            | "crate"
+            | "else"
+            | "enum"
+            | "extern"
+            | "false"
+            | "fn"
+            | "for"
+            | "if"
+            | "impl"
+            | "in"
+            | "let"
+            | "loop"
+            | "match"
+            | "mod"
+            | "move"
+            | "mut"
+            | "pub"
+            | "ref"
+            | "return"
+            | "self"
+            | "Self"
+            | "static"
+            | "struct"
+            | "super"
+            | "trait"
+            | "true"
+            | "type"
+            | "unsafe"
+            | "use"
+            | "where"
+            | "while"
+            | "async"
+            | "await"
+            | "dyn"
+    )
 }
 
 fn line(indent: usize, out: &mut String, args: std::fmt::Arguments<'_>) {

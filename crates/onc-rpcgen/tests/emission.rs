@@ -1,5 +1,6 @@
 use onc_rpcgen::{
     LoadOptions, emit_rust_types, fixture_root, generate_from_x_file_with_options, parse_x_file,
+    parse_x_source,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -109,6 +110,46 @@ fn emission_generates_serializers_for_real_and_cross_module_types() {
     assert!(blob.contains("impl XdrEncode for copy_request_t {"));
     assert!(blob.contains("crate::common_types::job_id_t"));
     assert!(blob.contains("crate::transfer_types::instance_info_t"));
+}
+
+#[test]
+fn emission_escapes_rust_keywords_and_qualifies_union_discriminants() {
+    let source = r#"
+enum mode_t {
+    MODE_A = 0,
+    MODE_B = 1
+};
+
+struct keyword_t {
+    int type;
+    int where;
+};
+
+union bool_union_t switch (bool enabled) {
+case TRUE:
+    int value;
+case FALSE:
+    void;
+};
+
+union enum_union_t switch (mode_t mode) {
+case MODE_A:
+    int value;
+default:
+    void;
+};
+"#;
+
+    let schema = parse_x_source(source).expect("source should parse");
+    let emitted = emit_rust_types(&schema).expect("source should emit");
+
+    assert!(emitted.contains("pub r#type: i32,"));
+    assert!(emitted.contains("pub r#where: i32,"));
+    assert!(emitted.contains("self.r#type.encode_xdr(output)?;"));
+    assert!(emitted.contains("self.r#where.encode_xdr(output)?;"));
+    assert!(emitted.contains("true => Ok(Self::True {"));
+    assert!(emitted.contains("false => Ok(Self::False)"));
+    assert!(emitted.contains("mode_t::MODE_A => Ok(Self::ModeA {"));
 }
 
 fn assert_snapshot(fixture_path: &str, expected_path: &str) {

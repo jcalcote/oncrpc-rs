@@ -101,7 +101,9 @@ fn generated_typed_client_marshals_request_and_reply_payloads() {
     };
     let client = Client::new(client_config(), transport);
     let stub =
-        blob_service_basic_stubs::blob_service::blob_service_v1::BLOB_SERVICE_V1Client::new(client);
+        blob_service_basic_stubs::blob_service::blob_service_v1::client::BLOB_SERVICE_V1Client::new(
+            client,
+        );
     let expected_request = sample_request();
 
     let reply = stub
@@ -135,7 +137,7 @@ struct TypedService {
     seen: Arc<Mutex<Vec<blob_service_basic::copy_request_t>>>,
 }
 
-impl blob_service_basic_stubs::blob_service::blob_service_v1::BLOB_SERVICE_V1Service
+impl blob_service_basic_stubs::blob_service::blob_service_v1::server::BLOB_SERVICE_V1Service
     for TypedService
 {
     fn blob_null(&self) -> Result<(), DispatchError> {
@@ -155,7 +157,7 @@ impl blob_service_basic_stubs::blob_service::blob_service_v1::BLOB_SERVICE_V1Ser
 fn generated_typed_dispatch_unmarshals_request_and_marshals_reply_payloads() {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let dispatch =
-        blob_service_basic_stubs::blob_service::blob_service_v1::BLOB_SERVICE_V1Dispatch::new(
+        blob_service_basic_stubs::blob_service::blob_service_v1::server::BLOB_SERVICE_V1Dispatch::new(
             TypedService { seen: seen.clone() },
         );
     let expected_request = sample_request();

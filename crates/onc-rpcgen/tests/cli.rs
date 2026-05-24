@@ -59,6 +59,8 @@ fn generate_command_writes_types_and_stubs_files() {
     assert!(types.contains("pub mod blob_service {"));
     assert!(types.contains("crate::common_types::job_id_t"));
     assert!(types.contains("crate::transfer_types::job_update_t"));
+    assert!(stubs.contains("pub mod client {"));
+    assert!(stubs.contains("pub mod server {"));
     assert!(stubs.contains("pub struct BLOB_SERVICE_V1Client<T> {"));
     assert!(!stubs.contains("nfs_support_program"));
     assert!(transfer_types.contains("crate::nfs_support::remote_handle_t"));
@@ -108,4 +110,56 @@ fn generate_command_resolves_include_dirs() {
     assert!(types.contains("crate::shared_types::handle_id_t"));
     assert!(stubs.contains("pub struct SAMPLE_V1Client<T> {"));
     assert!(!out_dir.join("shared_types.stubs.rs").exists());
+}
+
+#[test]
+fn emit_stubs_command_can_omit_client_or_server_sections() {
+    let temp = TempDir::new().expect("tempdir should exist");
+    let fixture = fixture_root().join("xdr/real/blob_service_basic.x");
+
+    Command::cargo_bin("onc-rpcgen")
+        .expect("cli binary should build")
+        .args(["emit", "stubs", "--no-client", "--out-dir"])
+        .arg(temp.path())
+        .arg(&fixture)
+        .assert()
+        .success();
+
+    let stubs = fs::read_to_string(temp.path().join("blob_service_basic.stubs.rs"))
+        .expect("stubs output should exist");
+    assert!(stubs.contains("pub mod server {"));
+    assert!(!stubs.contains("pub struct BLOB_SERVICE_V1Client<T>"));
+    assert!(stubs.contains("pub trait BLOB_SERVICE_V1Service {"));
+
+    let temp = TempDir::new().expect("tempdir should exist");
+    Command::cargo_bin("onc-rpcgen")
+        .expect("cli binary should build")
+        .args(["emit", "stubs", "--no-server", "--out-dir"])
+        .arg(temp.path())
+        .arg(&fixture)
+        .assert()
+        .success();
+
+    let stubs = fs::read_to_string(temp.path().join("blob_service_basic.stubs.rs"))
+        .expect("stubs output should exist");
+    assert!(stubs.contains("pub mod client {"));
+    assert!(stubs.contains("pub struct BLOB_SERVICE_V1Client<T>"));
+    assert!(!stubs.contains("pub trait BLOB_SERVICE_V1Service {"));
+}
+
+#[test]
+fn generate_command_verbose_lists_written_files() {
+    let temp = TempDir::new().expect("tempdir should exist");
+    let fixture = fixture_root().join("xdr/real/blob_service_basic.x");
+
+    Command::cargo_bin("onc-rpcgen")
+        .expect("cli binary should build")
+        .args(["generate", "--verbose", "--out-dir"])
+        .arg(temp.path())
+        .arg(fixture)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("blob_service_basic.types.rs"))
+        .stdout(predicate::str::contains("blob_service_basic.stubs.rs"))
+        .stdout(predicate::str::contains("transfer_types.types.rs"));
 }

@@ -50,6 +50,7 @@ fn stub_emission_is_deterministic() {
 fn stub_emission_generates_client_service_and_dispatch_shapes() {
     let emitted = emitted_fixture("xdr/real/blob_service_basic.x");
 
+    assert!(emitted.contains("pub mod client {"));
     assert!(emitted.contains("pub struct BLOB_SERVICE_V1Client<T> {"));
     assert!(
         emitted.contains("pub fn blob_null(&self) -> Result<(), onc_rpc_runtime::RuntimeError> {")
@@ -57,6 +58,7 @@ fn stub_emission_generates_client_service_and_dispatch_shapes() {
     assert!(emitted.contains(
         "pub fn blob_copy(&self, argument: crate::blob_service_basic::copy_request_t) -> Result<crate::transfer_types::job_result_t, onc_rpc_runtime::RuntimeError> {"
     ));
+    assert!(emitted.contains("pub mod server {"));
     assert!(emitted.contains("pub trait BLOB_SERVICE_V1Service {"));
     assert!(emitted.contains("fn blob_null(&self) -> Result<(), onc_rpc_server::DispatchError>;"));
     assert!(emitted.contains(
