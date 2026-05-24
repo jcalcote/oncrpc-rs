@@ -1,5 +1,3 @@
-use bytes::Bytes;
-
 pub mod blob_service {
     pub const PROGRAM: u32 = 200001;
 
@@ -17,29 +15,27 @@ pub mod blob_service {
                 Self { client }
             }
 
-            pub fn blob_null(&self) -> Result<onc_rpc_runtime::CallResponse, onc_rpc_runtime::RuntimeError> {
-                let request = onc_rpc_runtime::CallRequest::new(
+            pub fn blob_null(&self) -> Result<(), onc_rpc_runtime::RuntimeError> {
+                self.client.call_typed(
                     onc_rpc_runtime::ProgramVersion { program: super::PROGRAM, version: VERSION },
                     onc_rpc_runtime::Procedure(BLOB_NULL),
-                    Bytes::new(),
-                );
-                self.client.call(request)
+                    &(),
+                )
             }
 
-            pub fn blob_copy(&self, payload: Bytes) -> Result<onc_rpc_runtime::CallResponse, onc_rpc_runtime::RuntimeError> {
-                let request = onc_rpc_runtime::CallRequest::new(
+            pub fn blob_copy(&self, argument: crate::blob_service_basic::copy_request_t) -> Result<crate::transfer_types::job_result_t, onc_rpc_runtime::RuntimeError> {
+                self.client.call_typed(
                     onc_rpc_runtime::ProgramVersion { program: super::PROGRAM, version: VERSION },
                     onc_rpc_runtime::Procedure(BLOB_COPY),
-                    payload,
-                );
-                self.client.call(request)
+                    &argument,
+                )
             }
 
         }
 
         pub trait BLOB_SERVICE_V1Service {
-            fn blob_null(&self) -> Result<Bytes, onc_rpc_server::DispatchError>;
-            fn blob_copy(&self, payload: Bytes) -> Result<Bytes, onc_rpc_server::DispatchError>;
+            fn blob_null(&self) -> Result<(), onc_rpc_server::DispatchError>;
+            fn blob_copy(&self, argument: crate::blob_service_basic::copy_request_t) -> Result<crate::transfer_types::job_result_t, onc_rpc_server::DispatchError>;
         }
 
         pub struct BLOB_SERVICE_V1Dispatch<T> {
@@ -56,10 +52,16 @@ pub mod blob_service {
             fn dispatch(&self, request: onc_rpc_server::RequestContext) -> Result<onc_rpc_server::ResponsePayload, onc_rpc_server::DispatchError> {
                 match request.procedure.0 {
                     0 => {
-                        self.inner.blob_null().map(onc_rpc_server::ResponsePayload::success)
+                        <() as onc_rpc_xdr::XdrDecode>::from_xdr_bytes(&request.payload).map_err(|_| onc_rpc_server::DispatchError::GarbageArgs)?;
+                        self.inner.blob_null()?;
+                        let payload = onc_rpc_xdr::XdrEncode::to_xdr_bytes(&()).map_err(|_| onc_rpc_server::DispatchError::SystemError)?;
+                        Ok(onc_rpc_server::ResponsePayload::success(payload))
                     }
                     1 => {
-                        self.inner.blob_copy(request.payload).map(onc_rpc_server::ResponsePayload::success)
+                        let argument = <crate::blob_service_basic::copy_request_t as onc_rpc_xdr::XdrDecode>::from_xdr_bytes(&request.payload).map_err(|_| onc_rpc_server::DispatchError::GarbageArgs)?;
+                        let response = self.inner.blob_copy(argument)?;
+                        let payload = onc_rpc_xdr::XdrEncode::to_xdr_bytes(&response).map_err(|_| onc_rpc_server::DispatchError::SystemError)?;
+                        Ok(onc_rpc_server::ResponsePayload::success(payload))
                     }
                     _ => Err(onc_rpc_server::DispatchError::ProcedureUnavailable),
                 }

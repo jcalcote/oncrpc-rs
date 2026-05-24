@@ -40,6 +40,18 @@ pub trait XdrDecode: Sized {
     }
 }
 
+impl XdrEncode for () {
+    fn encode_xdr(&self, _output: &mut BytesMut) -> Result<(), XdrError> {
+        Ok(())
+    }
+}
+
+impl XdrDecode for () {
+    fn decode_xdr(_input: &mut &[u8]) -> Result<Self, XdrError> {
+        Ok(())
+    }
+}
+
 impl XdrEncode for bool {
     fn encode_xdr(&self, output: &mut BytesMut) -> Result<(), XdrError> {
         output.put_u32(u32::from(*self));

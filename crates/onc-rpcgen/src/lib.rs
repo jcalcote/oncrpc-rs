@@ -210,7 +210,7 @@ pub fn generate_rust_module_set(
             None
         };
         let stubs = if options.emit_stubs && module.module_name == loaded.root_module {
-            empty_is_none(emit_rust_stubs_for_module(module)?)
+            empty_is_none(emit_rust_stubs_for_module(module, loaded)?)
         } else {
             None
         };

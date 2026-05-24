@@ -129,7 +129,7 @@ fn run(cli: Cli) -> Result<(), GeneratorError> {
                         module_name: module.module_name.clone(),
                         types: None,
                         stubs: {
-                            let output = emit_rust_stubs_for_module(module)?;
+                            let output = emit_rust_stubs_for_module(module, &loaded)?;
                             if output.trim().is_empty() {
                                 None
                             } else {

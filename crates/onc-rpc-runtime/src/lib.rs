@@ -5,6 +5,7 @@ pub use onc_rpc_wire::{
     AcceptedReply, AcceptedStatus, AuthStat, MessageBody, OpaqueAuth, Procedure, ProgramVersion,
     RecordMarker, RecordRead, RejectedReply, ReplyBody, RpcMessage, VersionRange, WireError, Xid,
 };
+use onc_rpc_xdr::{XdrDecode, XdrEncode};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
@@ -87,6 +88,10 @@ pub enum RuntimeError {
     RpcMismatch(VersionRange),
     #[error("rpc auth error: {0:?}")]
     AuthError(AuthStat),
+    #[error("failed to encode XDR payload: {0}")]
+    Encode(onc_rpc_xdr::XdrError),
+    #[error("failed to decode XDR payload: {0}")]
+    Decode(onc_rpc_xdr::XdrError),
 }
 
 pub struct Client<T> {
@@ -148,6 +153,21 @@ where
                 Err(RuntimeError::AuthError(status))
             }
         }
+    }
+
+    pub fn call_typed<Arg, Ret>(
+        &self,
+        program: ProgramVersion,
+        procedure: Procedure,
+        argument: &Arg,
+    ) -> Result<Ret, RuntimeError>
+    where
+        Arg: XdrEncode,
+        Ret: XdrDecode,
+    {
+        let payload = argument.to_xdr_bytes().map_err(RuntimeError::Encode)?;
+        let response = self.call(CallRequest::new(program, procedure, payload))?;
+        Ret::from_xdr_bytes(&response.payload).map_err(RuntimeError::Decode)
     }
 
     fn build_request_message(&self, xid: Xid, request: CallRequest) -> RpcMessage {
@@ -219,6 +239,21 @@ mod tests {
         )
     }
 
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct EchoValue(u32);
+
+    impl XdrEncode for EchoValue {
+        fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {
+            self.0.encode_xdr(output)
+        }
+    }
+
+    impl XdrDecode for EchoValue {
+        fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+            Ok(Self(u32::decode_xdr(input)?))
+        }
+    }
+
     #[test]
     fn client_call_returns_success_payload() {
         let reply = RpcMessage {
@@ -274,5 +309,61 @@ mod tests {
             .expect_err("program unavailable must fail");
 
         assert_eq!(error, RuntimeError::ProgramUnavailable);
+    }
+
+    #[test]
+    fn client_call_typed_encodes_request_and_decodes_reply() {
+        let reply_payload = EchoValue(99)
+            .to_xdr_bytes()
+            .expect("reply payload should encode");
+        let reply = RpcMessage {
+            xid: Xid(1),
+            body: MessageBody::Reply(ReplyBody::Accepted(AcceptedReply {
+                verifier: OpaqueAuth::none(),
+                status: AcceptedStatus::Success(reply_payload),
+            })),
+        };
+        let client = Client::new(config(), FakeTransport::new(vec![Ok(reply)]));
+
+        let response: EchoValue = client
+            .call_typed(
+                ProgramVersion {
+                    program: 100_003,
+                    version: 3,
+                },
+                Procedure(1),
+                &EchoValue(7),
+            )
+            .expect("typed call should succeed");
+
+        assert_eq!(response, EchoValue(99));
+    }
+
+    #[test]
+    fn client_call_typed_reports_decode_failures() {
+        let reply = RpcMessage {
+            xid: Xid(1),
+            body: MessageBody::Reply(ReplyBody::Accepted(AcceptedReply {
+                verifier: OpaqueAuth::none(),
+                status: AcceptedStatus::Success(Bytes::from_static(&[0, 0, 0])),
+            })),
+        };
+        let client = Client::new(config(), FakeTransport::new(vec![Ok(reply)]));
+
+        let error = client
+            .call_typed::<(), EchoValue>(
+                ProgramVersion {
+                    program: 100_003,
+                    version: 3,
+                },
+                Procedure(1),
+                &(),
+            )
+            .expect_err("invalid XDR should fail decode");
+
+        assert!(matches!(
+            error,
+            RuntimeError::Decode(onc_rpc_xdr::XdrError::UnexpectedEof { .. })
+        ));
     }
 }
