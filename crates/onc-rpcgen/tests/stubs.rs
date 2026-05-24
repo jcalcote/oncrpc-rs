@@ -56,7 +56,13 @@ fn stub_emission_generates_client_service_and_dispatch_shapes() {
         emitted.contains("pub fn blob_null(&self) -> Result<(), onc_rpc_runtime::RuntimeError> {")
     );
     assert!(emitted.contains(
+        "pub fn blob_null_with_options(&self, options: &onc_rpc_runtime::CallOptions) -> Result<(), onc_rpc_runtime::RuntimeError> {"
+    ));
+    assert!(emitted.contains(
         "pub fn blob_copy(&self, argument: crate::blob_service_basic::copy_request_t) -> Result<crate::transfer_types::job_result_t, onc_rpc_runtime::RuntimeError> {"
+    ));
+    assert!(emitted.contains(
+        "pub fn blob_copy_with_options(&self, argument: crate::blob_service_basic::copy_request_t, options: &onc_rpc_runtime::CallOptions) -> Result<crate::transfer_types::job_result_t, onc_rpc_runtime::RuntimeError> {"
     ));
     assert!(emitted.contains("pub mod server {"));
     assert!(emitted.contains("pub trait BLOB_SERVICE_V1Service {"));
@@ -69,6 +75,9 @@ fn stub_emission_generates_client_service_and_dispatch_shapes() {
     assert!(emitted.contains("pub mod async_client {"));
     assert!(emitted.contains(
         "pub async fn blob_copy(&self, argument: crate::blob_service_basic::copy_request_t) -> Result<crate::transfer_types::job_result_t, onc_rpc_runtime::RuntimeError> {"
+    ));
+    assert!(emitted.contains(
+        "pub async fn blob_copy_with_options(&self, argument: crate::blob_service_basic::copy_request_t, options: &onc_rpc_runtime::CallOptions) -> Result<crate::transfer_types::job_result_t, onc_rpc_runtime::RuntimeError> {"
     ));
     assert!(emitted.contains("pub mod async_server {"));
     assert!(emitted.contains("#[onc_rpc_server::async_trait]"));

@@ -1,8 +1,9 @@
 use bytes::{Bytes, BytesMut};
 use onc_rpc_runtime::{
-    AcceptedReply, AcceptedStatus, AsyncClient, CallRequest, Client, ClientConfig, MessageBody,
-    OpaqueAuth, Procedure, ProgramVersion, ReplyBody, RpcMessage, TokioAsyncClientTransport,
-    TokioClientTransport, Xid, try_decode_message_from_buffer, write_rpc_message,
+    AcceptedReply, AcceptedStatus, AsyncClient, CallOptions, CallRequest, Client, ClientConfig,
+    MessageBody, OpaqueAuth, Procedure, ProgramVersion, ReplyBody, RpcMessage,
+    TokioAsyncClientTransport, TokioClientTransport, Xid, try_decode_message_from_buffer,
+    write_rpc_message,
 };
 use onc_rpc_wire::fragment_record;
 use std::sync::{Arc, Barrier};
@@ -248,6 +249,91 @@ async fn async_transport_honors_default_call_timeout() {
             Procedure(1),
             Bytes::from_static(b"hello"),
         ))
+        .await
+        .expect_err("call should time out");
+
+    match error {
+        onc_rpc_runtime::RuntimeError::Transport(message) => {
+            assert!(
+                message.contains("call timeout"),
+                "unexpected message: {message}"
+            );
+        }
+        other => panic!("expected call-timeout transport error, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn async_transport_can_disable_timeout_per_call() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let addr = listener.local_addr().expect("local addr");
+
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.expect("accept should succeed");
+        let (mut reader, mut writer) = stream.into_split();
+        let mut buffer = BytesMut::with_capacity(1024);
+        let request = next_message(&mut reader, &mut buffer).await;
+        tokio::time::sleep(Duration::from_millis(120)).await;
+        write_rpc_message(&mut writer, &reply(request.xid, request_payload(&request)))
+            .await
+            .expect("reply should write");
+    });
+
+    let config = ClientConfig::new(addr)
+        .with_connect_timeout(Duration::from_secs(5))
+        .with_default_call_timeout(Duration::from_millis(50));
+    let transport = TokioAsyncClientTransport::connect(&config)
+        .await
+        .expect("client should connect");
+    let client = AsyncClient::new(config, transport);
+
+    let response: u32 = client
+        .call_typed_with_options::<u32, u32>(
+            ProgramVersion {
+                program: 100_003,
+                version: 3,
+            },
+            Procedure(1),
+            &33_u32,
+            &CallOptions::new().without_timeout(),
+        )
+        .await
+        .expect("call should succeed without timeout");
+
+    assert_eq!(response, 33);
+    server.await.expect("server task should complete");
+}
+
+#[tokio::test]
+async fn async_transport_can_override_timeout_per_call() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let addr = listener.local_addr().expect("local addr");
+
+    let _server = tokio::spawn(async move {
+        let (_stream, _) = listener.accept().await.expect("accept should succeed");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    });
+
+    let config = ClientConfig::new(addr).with_connect_timeout(Duration::from_secs(5));
+    let transport = TokioAsyncClientTransport::connect(&config)
+        .await
+        .expect("client should connect");
+    let client = AsyncClient::new(config, transport);
+
+    let error = client
+        .call_typed_with_options::<u32, u32>(
+            ProgramVersion {
+                program: 100_003,
+                version: 3,
+            },
+            Procedure(1),
+            &44_u32,
+            &CallOptions::new().with_timeout(Duration::from_millis(50)),
+        )
         .await
         .expect_err("call should time out");
 

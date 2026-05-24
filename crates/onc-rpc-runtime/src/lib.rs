@@ -98,13 +98,66 @@ pub struct CallResponse {
     pub payload: Bytes,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CallTimeout {
+    #[default]
+    Inherit,
+    None,
+    Duration(Duration),
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CallOptions {
+    pub timeout: CallTimeout,
+}
+
+impl CallOptions {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = CallTimeout::Duration(timeout);
+        self
+    }
+
+    pub fn without_timeout(mut self) -> Self {
+        self.timeout = CallTimeout::None;
+        self
+    }
+
+    pub fn effective_timeout(&self, default_timeout: Option<Duration>) -> Option<Duration> {
+        match self.timeout {
+            CallTimeout::Inherit => default_timeout,
+            CallTimeout::None => None,
+            CallTimeout::Duration(timeout) => Some(timeout),
+        }
+    }
+}
+
 pub trait ClientTransport: Send + Sync + 'static {
     fn call(&self, request: RpcMessage) -> Result<RpcMessage, RuntimeError>;
+
+    fn call_with_options(
+        &self,
+        request: RpcMessage,
+        _options: &CallOptions,
+    ) -> Result<RpcMessage, RuntimeError> {
+        self.call(request)
+    }
 }
 
 #[async_trait]
 pub trait AsyncClientTransport: Send + Sync + 'static {
     async fn call(&self, request: RpcMessage) -> Result<RpcMessage, RuntimeError>;
+
+    async fn call_with_options(
+        &self,
+        request: RpcMessage,
+        _options: &CallOptions,
+    ) -> Result<RpcMessage, RuntimeError> {
+        self.call(request).await
+    }
 }
 
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
@@ -168,9 +221,17 @@ where
     }
 
     pub fn call(&self, request: CallRequest) -> Result<CallResponse, RuntimeError> {
+        self.call_with_options(request, &CallOptions::default())
+    }
+
+    pub fn call_with_options(
+        &self,
+        request: CallRequest,
+        options: &CallOptions,
+    ) -> Result<CallResponse, RuntimeError> {
         let xid = Xid(self.next_xid.fetch_add(1, Ordering::Relaxed));
         let wire_request = build_request_message(&self.config, xid, request);
-        let reply = self.transport.call(wire_request)?;
+        let reply = self.transport.call_with_options(wire_request, options)?;
         handle_reply(xid, reply)
     }
 
@@ -184,8 +245,23 @@ where
         Arg: XdrEncode,
         Ret: XdrDecode,
     {
+        self.call_typed_with_options(program, procedure, argument, &CallOptions::default())
+    }
+
+    pub fn call_typed_with_options<Arg, Ret>(
+        &self,
+        program: ProgramVersion,
+        procedure: Procedure,
+        argument: &Arg,
+        options: &CallOptions,
+    ) -> Result<Ret, RuntimeError>
+    where
+        Arg: XdrEncode,
+        Ret: XdrDecode,
+    {
         let payload = argument.to_xdr_bytes().map_err(RuntimeError::Encode)?;
-        let response = self.call(CallRequest::new(program, procedure, payload))?;
+        let response =
+            self.call_with_options(CallRequest::new(program, procedure, payload), options)?;
         Ret::from_xdr_bytes(&response.payload).map_err(RuntimeError::Decode)
     }
 }
@@ -207,9 +283,21 @@ where
     }
 
     pub async fn call(&self, request: CallRequest) -> Result<CallResponse, RuntimeError> {
+        self.call_with_options(request, &CallOptions::default())
+            .await
+    }
+
+    pub async fn call_with_options(
+        &self,
+        request: CallRequest,
+        options: &CallOptions,
+    ) -> Result<CallResponse, RuntimeError> {
         let xid = Xid(self.next_xid.fetch_add(1, Ordering::Relaxed));
         let wire_request = build_request_message(&self.config, xid, request);
-        let reply = self.transport.call(wire_request).await?;
+        let reply = self
+            .transport
+            .call_with_options(wire_request, options)
+            .await?;
         handle_reply(xid, reply)
     }
 
@@ -223,9 +311,24 @@ where
         Arg: XdrEncode,
         Ret: XdrDecode,
     {
+        self.call_typed_with_options(program, procedure, argument, &CallOptions::default())
+            .await
+    }
+
+    pub async fn call_typed_with_options<Arg, Ret>(
+        &self,
+        program: ProgramVersion,
+        procedure: Procedure,
+        argument: &Arg,
+        options: &CallOptions,
+    ) -> Result<Ret, RuntimeError>
+    where
+        Arg: XdrEncode,
+        Ret: XdrDecode,
+    {
         let payload = argument.to_xdr_bytes().map_err(RuntimeError::Encode)?;
         let response = self
-            .call(CallRequest::new(program, procedure, payload))
+            .call_with_options(CallRequest::new(program, procedure, payload), options)
             .await?;
         Ret::from_xdr_bytes(&response.payload).map_err(RuntimeError::Decode)
     }
@@ -448,6 +551,26 @@ mod tests {
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     struct EchoValue(u32);
+
+    #[test]
+    fn call_options_resolve_inherit_none_and_override() {
+        assert_eq!(
+            CallOptions::default().effective_timeout(Some(Duration::from_secs(5))),
+            Some(Duration::from_secs(5))
+        );
+        assert_eq!(
+            CallOptions::new()
+                .without_timeout()
+                .effective_timeout(Some(Duration::from_secs(5))),
+            None
+        );
+        assert_eq!(
+            CallOptions::new()
+                .with_timeout(Duration::from_secs(9))
+                .effective_timeout(Some(Duration::from_secs(5))),
+            Some(Duration::from_secs(9))
+        );
+    }
 
     impl XdrEncode for EchoValue {
         fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {

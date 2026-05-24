@@ -54,6 +54,7 @@ The workspace now includes:
 - generated Rust XDR types with `XdrEncode` / `XdrDecode` impls
 - per-file `.x` module generation with include-aware loading
 - typed synchronous and asynchronous client/server stub generation
+- request-level call options with per-call timeout override support
 - a working `oncrpcgen` CLI that can generate usable output from real `.x` inputs
 
 The main remaining implementation work is in transport depth, interoperability,
@@ -131,6 +132,10 @@ let stub = TIME_SERVICE_V1Client::new(AsyncClient::new(config, transport));
 println!("{}", stub.get_time().await?);
 ```
 
+When a specific call needs different timeout behavior than the client default,
+generated client stubs also expose `_with_options(...)` variants that take
+`onc_rpc_runtime::CallOptions`.
+
 ## Third-Party Dependencies
 
 Current Rust dependencies are intentionally small:
@@ -162,6 +167,6 @@ cargo check --workspace
 ## Near-Term Priorities
 
 - deepen TCP runtime and server transport behavior beyond the current stub-facing contracts
-- add timeout and per-call auth options to the generated/runtime API surface
+- add per-call auth options to the generated/runtime API surface
 - improve `oncrpcgen` CLI help and consumer integration ergonomics
 - add interoperability tests against existing ONC RPC implementations

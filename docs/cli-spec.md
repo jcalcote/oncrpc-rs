@@ -30,7 +30,7 @@ This specification covers the current `onc-rpcgen` implementation:
 This specification does not yet define:
 
 - exact `build.rs` integration API
-- timeout/per-call auth generated API variants
+- per-call auth generated API variants
 - rpcbind integration
 - TLS-specific generation behavior
 
@@ -324,17 +324,38 @@ The current client generation contract is typed and additive:
 
 - typed synchronous client modules
 - typed asynchronous client modules
+- options-bearing client method variants for request-level call policy
 
 Examples:
 
 ```rust
 pub fn proc(&self, arg: Arg) -> Result<Ret, RuntimeError>;
+pub fn proc_with_options(
+    &self,
+    arg: Arg,
+    options: &onc_rpc_runtime::CallOptions,
+) -> Result<Ret, RuntimeError>;
 pub fn proc(&self) -> Result<Ret, RuntimeError>;
-pub fn proc(&self, arg: Arg) -> Result<(), RuntimeError>;
+pub async fn proc_with_options(
+    &self,
+    arg: Arg,
+    options: &onc_rpc_runtime::CallOptions,
+) -> Result<Ret, RuntimeError>;
 ```
 
 Generated client methods must marshal arguments and replies through
 `onc_rpc_xdr::XdrEncode` and `onc_rpc_xdr::XdrDecode`.
+
+Generated options-bearing methods currently expose
+`onc_rpc_runtime::CallOptions`, whose timeout semantics are:
+
+- `CallTimeout::Inherit`
+- `CallTimeout::None`
+- `CallTimeout::Duration(...)`
+
+This keeps simple methods short while allowing request-level timeout policy to
+inherit the client default, disable the timeout for a specific call, or apply
+an explicit override.
 
 The intended direction is:
 
@@ -356,6 +377,14 @@ pub mod client {
         ) -> Result<job_result_t, RuntimeError> {
             /* ... */
         }
+
+        pub fn blob_copy_with_options(
+            &self,
+            arg: copy_request_t,
+            options: &onc_rpc_runtime::CallOptions,
+        ) -> Result<job_result_t, RuntimeError> {
+            /* ... */
+        }
     }
 }
 
@@ -366,6 +395,14 @@ pub mod async_client {
         pub async fn blob_copy(
             &self,
             arg: copy_request_t,
+        ) -> Result<job_result_t, RuntimeError> {
+            /* ... */
+        }
+
+        pub async fn blob_copy_with_options(
+            &self,
+            arg: copy_request_t,
+            options: &onc_rpc_runtime::CallOptions,
         ) -> Result<job_result_t, RuntimeError> {
             /* ... */
         }
@@ -461,6 +498,7 @@ The currently implemented contract covers:
 3. generated XDR serializers
 4. typed synchronous client and server stubs
 5. additive typed asynchronous client and server stubs
-6. a thin CLI over the library generation API
+6. request-level timeout-aware `_with_options(...)` client methods
+7. a thin CLI over the library generation API
 
 Future work should build on this contract rather than redefining it.

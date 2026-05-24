@@ -77,6 +77,8 @@ Owns client-side transport/runtime behavior:
 - local bind support
 - connect timeouts
 - default per-call timeout and write timeout policy
+- request-level call options that can inherit, disable, or override the client
+  default timeout
 - request/reply correlation
 - TCP record framing and reassembly
 - synchronous and asynchronous client call handling
@@ -111,6 +113,9 @@ requirements. In practice that means:
   transport defaults
 - no default call timeout should remain a supported and explicit choice for
   long-running synchronous or asynchronous operations
+- request-level timeout policy should override client defaults explicitly and
+  support three states: inherit the client default, disable the timeout for
+  that call, or provide a call-specific duration
 
 ### `onc-rpc-server`
 

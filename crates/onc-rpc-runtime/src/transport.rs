@@ -1,6 +1,6 @@
 use crate::{
-    AsyncClientTransport, ClientConfig, ClientTransport, RpcMessage, RuntimeError, Xid,
-    try_decode_message_from_buffer, write_rpc_message,
+    AsyncClientTransport, CallOptions, ClientConfig, ClientTransport, RpcMessage, RuntimeError,
+    Xid, try_decode_message_from_buffer, write_rpc_message,
 };
 use async_trait::async_trait;
 use bytes::BytesMut;
@@ -112,6 +112,15 @@ impl Drop for OwnedRuntime {
 #[async_trait]
 impl AsyncClientTransport for TokioAsyncClientTransport {
     async fn call(&self, request: RpcMessage) -> Result<RpcMessage, RuntimeError> {
+        self.call_with_options(request, &CallOptions::default())
+            .await
+    }
+
+    async fn call_with_options(
+        &self,
+        request: RpcMessage,
+        options: &CallOptions,
+    ) -> Result<RpcMessage, RuntimeError> {
         let xid = request.xid;
         let (tx, rx) = oneshot::channel();
         self.pending.lock().await.insert(xid, tx);
@@ -134,7 +143,7 @@ impl AsyncClientTransport for TokioAsyncClientTransport {
             return Err(error);
         }
 
-        let reply_result = match self.default_call_timeout {
+        let reply_result = match options.effective_timeout(self.default_call_timeout) {
             Some(timeout_duration) => match timeout(timeout_duration, rx).await {
                 Ok(result) => result,
                 Err(_) => {
@@ -157,12 +166,21 @@ impl AsyncClientTransport for TokioAsyncClientTransport {
 
 impl ClientTransport for TokioClientTransport {
     fn call(&self, request: RpcMessage) -> Result<RpcMessage, RuntimeError> {
+        self.call_with_options(request, &CallOptions::default())
+    }
+
+    fn call_with_options(
+        &self,
+        request: RpcMessage,
+        options: &CallOptions,
+    ) -> Result<RpcMessage, RuntimeError> {
         let (tx, rx) = mpsc::sync_channel(1);
         let inner = self.inner.clone();
         let _runtime_guard = self.runtime_guard.clone();
+        let options = options.clone();
 
         self.runtime_handle.spawn(async move {
-            let _ = tx.send(inner.call(request).await);
+            let _ = tx.send(inner.call_with_options(request, &options).await);
         });
 
         rx.recv().map_err(|_| RuntimeError::ConnectionClosed)?

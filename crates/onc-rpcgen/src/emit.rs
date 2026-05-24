@@ -457,6 +457,37 @@ impl StubEmitter {
             );
             line(indent + 8, &mut self.out, format_args!("&(),"));
             line(indent + 4, &mut self.out, format_args!(")"));
+            line(indent, &mut self.out, format_args!("}}"));
+            self.out.push('\n');
+
+            line(
+                indent,
+                &mut self.out,
+                format_args!(
+                    "pub fn {}_with_options(&self, options: &onc_rpc_runtime::CallOptions) -> Result<{}, onc_rpc_runtime::RuntimeError> {{",
+                    method_name, reply_type
+                ),
+            );
+            line(
+                indent + 4,
+                &mut self.out,
+                format_args!("self.client.call_typed_with_options("),
+            );
+            line(
+                indent + 8,
+                &mut self.out,
+                format_args!(
+                    "onc_rpc_runtime::ProgramVersion {{ program: super::super::PROGRAM, version: super::VERSION }},"
+                ),
+            );
+            line(
+                indent + 8,
+                &mut self.out,
+                format_args!("onc_rpc_runtime::Procedure(super::{}),", procedure.name),
+            );
+            line(indent + 8, &mut self.out, format_args!("&(),"));
+            line(indent + 8, &mut self.out, format_args!("options,"));
+            line(indent + 4, &mut self.out, format_args!(")"));
         } else {
             line(
                 indent,
@@ -484,6 +515,37 @@ impl StubEmitter {
                 format_args!("onc_rpc_runtime::Procedure(super::{}),", procedure.name),
             );
             line(indent + 8, &mut self.out, format_args!("&argument,"));
+            line(indent + 4, &mut self.out, format_args!(")"));
+            line(indent, &mut self.out, format_args!("}}"));
+            self.out.push('\n');
+
+            line(
+                indent,
+                &mut self.out,
+                format_args!(
+                    "pub fn {}_with_options(&self, argument: {}, options: &onc_rpc_runtime::CallOptions) -> Result<{}, onc_rpc_runtime::RuntimeError> {{",
+                    method_name, request_type, reply_type
+                ),
+            );
+            line(
+                indent + 4,
+                &mut self.out,
+                format_args!("self.client.call_typed_with_options("),
+            );
+            line(
+                indent + 8,
+                &mut self.out,
+                format_args!(
+                    "onc_rpc_runtime::ProgramVersion {{ program: super::super::PROGRAM, version: super::VERSION }},"
+                ),
+            );
+            line(
+                indent + 8,
+                &mut self.out,
+                format_args!("onc_rpc_runtime::Procedure(super::{}),", procedure.name),
+            );
+            line(indent + 8, &mut self.out, format_args!("&argument,"));
+            line(indent + 8, &mut self.out, format_args!("options,"));
             line(indent + 4, &mut self.out, format_args!(")"));
         }
         line(indent, &mut self.out, format_args!("}}"));
@@ -536,6 +598,37 @@ impl StubEmitter {
             );
             line(indent + 8, &mut self.out, format_args!("&(),"));
             line(indent + 4, &mut self.out, format_args!(").await"));
+            line(indent, &mut self.out, format_args!("}}"));
+            self.out.push('\n');
+
+            line(
+                indent,
+                &mut self.out,
+                format_args!(
+                    "pub async fn {}_with_options(&self, options: &onc_rpc_runtime::CallOptions) -> Result<{}, onc_rpc_runtime::RuntimeError> {{",
+                    method_name, reply_type
+                ),
+            );
+            line(
+                indent + 4,
+                &mut self.out,
+                format_args!("self.client.call_typed_with_options("),
+            );
+            line(
+                indent + 8,
+                &mut self.out,
+                format_args!(
+                    "onc_rpc_runtime::ProgramVersion {{ program: super::super::PROGRAM, version: super::VERSION }},"
+                ),
+            );
+            line(
+                indent + 8,
+                &mut self.out,
+                format_args!("onc_rpc_runtime::Procedure(super::{}),", procedure.name),
+            );
+            line(indent + 8, &mut self.out, format_args!("&(),"));
+            line(indent + 8, &mut self.out, format_args!("options,"));
+            line(indent + 4, &mut self.out, format_args!(").await"));
         } else {
             line(
                 indent,
@@ -563,6 +656,37 @@ impl StubEmitter {
                 format_args!("onc_rpc_runtime::Procedure(super::{}),", procedure.name),
             );
             line(indent + 8, &mut self.out, format_args!("&argument,"));
+            line(indent + 4, &mut self.out, format_args!(").await"));
+            line(indent, &mut self.out, format_args!("}}"));
+            self.out.push('\n');
+
+            line(
+                indent,
+                &mut self.out,
+                format_args!(
+                    "pub async fn {}_with_options(&self, argument: {}, options: &onc_rpc_runtime::CallOptions) -> Result<{}, onc_rpc_runtime::RuntimeError> {{",
+                    method_name, request_type, reply_type
+                ),
+            );
+            line(
+                indent + 4,
+                &mut self.out,
+                format_args!("self.client.call_typed_with_options("),
+            );
+            line(
+                indent + 8,
+                &mut self.out,
+                format_args!(
+                    "onc_rpc_runtime::ProgramVersion {{ program: super::super::PROGRAM, version: super::VERSION }},"
+                ),
+            );
+            line(
+                indent + 8,
+                &mut self.out,
+                format_args!("onc_rpc_runtime::Procedure(super::{}),", procedure.name),
+            );
+            line(indent + 8, &mut self.out, format_args!("&argument,"));
+            line(indent + 8, &mut self.out, format_args!("options,"));
             line(indent + 4, &mut self.out, format_args!(").await"));
         }
         line(indent, &mut self.out, format_args!("}}"));

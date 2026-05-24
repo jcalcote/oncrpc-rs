@@ -23,6 +23,15 @@ pub mod time_service {
                     )
                 }
 
+                pub fn get_time_with_options(&self, options: &onc_rpc_runtime::CallOptions) -> Result<crate::time_service::time_string, onc_rpc_runtime::RuntimeError> {
+                    self.client.call_typed_with_options(
+                        onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION },
+                        onc_rpc_runtime::Procedure(super::GET_TIME),
+                        &(),
+                        options,
+                    )
+                }
+
             }
 
         }
@@ -42,6 +51,15 @@ pub mod time_service {
                         onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION },
                         onc_rpc_runtime::Procedure(super::GET_TIME),
                         &(),
+                    ).await
+                }
+
+                pub async fn get_time_with_options(&self, options: &onc_rpc_runtime::CallOptions) -> Result<crate::time_service::time_string, onc_rpc_runtime::RuntimeError> {
+                    self.client.call_typed_with_options(
+                        onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION },
+                        onc_rpc_runtime::Procedure(super::GET_TIME),
+                        &(),
+                        options,
                     ).await
                 }
 

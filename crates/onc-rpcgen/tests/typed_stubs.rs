@@ -1,9 +1,9 @@
 use bytes::Bytes;
 use onc_rpc_runtime::async_trait as runtime_async_trait;
 use onc_rpc_runtime::{
-    AcceptedReply, AcceptedStatus, AsyncClient, AsyncClientTransport, Client, ClientConfig,
-    ClientTransport, MessageBody, OpaqueAuth, Procedure, ProgramVersion, ReplyBody, RpcMessage,
-    RuntimeError, TokioAsyncClientTransport, Xid,
+    AcceptedReply, AcceptedStatus, AsyncClient, AsyncClientTransport, CallOptions, CallTimeout,
+    Client, ClientConfig, ClientTransport, MessageBody, OpaqueAuth, Procedure, ProgramVersion,
+    ReplyBody, RpcMessage, RuntimeError, TokioAsyncClientTransport, Xid,
 };
 use onc_rpc_server::{
     AsyncDispatch, Dispatch, DispatchError, Program, RequestContext, ServerBuilder,
@@ -56,6 +56,7 @@ mod blob_service_basic_stubs {
 
 struct CaptureTransport {
     seen: Arc<Mutex<Option<RpcMessage>>>,
+    seen_options: Arc<Mutex<Option<CallOptions>>>,
     reply_payload: Bytes,
 }
 
@@ -70,12 +71,29 @@ impl ClientTransport for CaptureTransport {
             })),
         })
     }
+
+    fn call_with_options(
+        &self,
+        request: RpcMessage,
+        options: &CallOptions,
+    ) -> Result<RpcMessage, RuntimeError> {
+        *self.seen_options.lock().expect("mutex poisoned") = Some(options.clone());
+        ClientTransport::call(self, request)
+    }
 }
 
 #[runtime_async_trait]
 impl AsyncClientTransport for CaptureTransport {
     async fn call(&self, request: RpcMessage) -> Result<RpcMessage, RuntimeError> {
         ClientTransport::call(self, request)
+    }
+
+    async fn call_with_options(
+        &self,
+        request: RpcMessage,
+        options: &CallOptions,
+    ) -> Result<RpcMessage, RuntimeError> {
+        ClientTransport::call_with_options(self, request, options)
     }
 }
 
@@ -110,6 +128,7 @@ fn generated_typed_client_marshals_request_and_reply_payloads() {
         .expect("reply payload should encode");
     let transport = CaptureTransport {
         seen: seen.clone(),
+        seen_options: Arc::new(Mutex::new(None)),
         reply_payload,
     };
     let client = Client::new(client_config(), transport);
@@ -144,6 +163,41 @@ fn generated_typed_client_marshals_request_and_reply_payloads() {
     let decoded =
         blob_service_basic::copy_request_t::from_xdr_bytes(&call.payload).expect("decode request");
     assert_eq!(decoded, expected_request);
+}
+
+#[test]
+fn generated_typed_client_with_options_forwards_call_options() {
+    let seen = Arc::new(Mutex::new(None));
+    let seen_options = Arc::new(Mutex::new(None));
+    let expected_reply = sample_reply();
+    let reply_payload = expected_reply
+        .to_xdr_bytes()
+        .expect("reply payload should encode");
+    let transport = CaptureTransport {
+        seen,
+        seen_options: seen_options.clone(),
+        reply_payload,
+    };
+    let client = Client::new(client_config(), transport);
+    let stub =
+        blob_service_basic_stubs::blob_service::blob_service_v1::client::BLOB_SERVICE_V1Client::new(
+            client,
+        );
+
+    let response = stub
+        .blob_copy_with_options(
+            sample_request(),
+            &CallOptions::new().with_timeout(std::time::Duration::from_secs(30)),
+        )
+        .expect("typed client call should succeed");
+
+    assert_eq!(response, expected_reply);
+    assert_eq!(
+        *seen_options.lock().expect("mutex poisoned"),
+        Some(CallOptions {
+            timeout: CallTimeout::Duration(std::time::Duration::from_secs(30)),
+        })
+    );
 }
 
 struct TypedService {
@@ -210,6 +264,7 @@ async fn generated_async_typed_client_marshals_request_and_reply_payloads() {
         .expect("reply payload should encode");
     let transport = CaptureTransport {
         seen: seen.clone(),
+        seen_options: Arc::new(Mutex::new(None)),
         reply_payload,
     };
     let client = AsyncClient::new(client_config(), transport);
@@ -236,6 +291,38 @@ async fn generated_async_typed_client_marshals_request_and_reply_payloads() {
     let decoded =
         blob_service_basic::copy_request_t::from_xdr_bytes(&call.payload).expect("decode request");
     assert_eq!(decoded, expected_request);
+}
+
+#[tokio::test]
+async fn generated_async_typed_client_with_options_forwards_call_options() {
+    let seen = Arc::new(Mutex::new(None));
+    let seen_options = Arc::new(Mutex::new(None));
+    let expected_reply = sample_reply();
+    let reply_payload = expected_reply
+        .to_xdr_bytes()
+        .expect("reply payload should encode");
+    let transport = CaptureTransport {
+        seen,
+        seen_options: seen_options.clone(),
+        reply_payload,
+    };
+    let client = AsyncClient::new(client_config(), transport);
+    let stub = blob_service_basic_stubs::blob_service::blob_service_v1::async_client::BLOB_SERVICE_V1Client::new(
+        client,
+    );
+
+    let response = stub
+        .blob_copy_with_options(sample_request(), &CallOptions::new().without_timeout())
+        .await
+        .expect("typed async client call should succeed");
+
+    assert_eq!(response, expected_reply);
+    assert_eq!(
+        *seen_options.lock().expect("mutex poisoned"),
+        Some(CallOptions {
+            timeout: CallTimeout::None,
+        })
+    );
 }
 
 struct AsyncTypedService {
