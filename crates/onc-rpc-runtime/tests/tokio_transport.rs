@@ -10,6 +10,7 @@ use std::thread;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
+use tokio::task::JoinSet;
 
 async fn next_message(
     reader: &mut tokio::net::tcp::OwnedReadHalf,
@@ -157,6 +158,68 @@ async fn async_transport_correlates_concurrent_requests_by_xid() {
 }
 
 #[tokio::test]
+async fn async_transport_sustains_many_concurrent_calls_on_one_connection() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let addr = listener.local_addr().expect("local addr");
+    const CALLS: usize = 32;
+
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.expect("accept should succeed");
+        let (mut reader, mut writer) = stream.into_split();
+        let mut buffer = BytesMut::with_capacity(4096);
+        let mut requests = Vec::with_capacity(CALLS);
+
+        while requests.len() < CALLS {
+            requests.push(next_message(&mut reader, &mut buffer).await);
+        }
+
+        for request in requests.into_iter().rev() {
+            write_rpc_message(&mut writer, &reply(request.xid, request_payload(&request)))
+                .await
+                .expect("reply should write");
+        }
+    });
+
+    let config = ClientConfig::new(addr).with_connect_timeout(Duration::from_secs(5));
+    let transport = TokioAsyncClientTransport::connect(&config)
+        .await
+        .expect("client should connect");
+    let client = Arc::new(AsyncClient::new(config, transport));
+    let mut tasks = JoinSet::new();
+
+    for value in 0..CALLS as u32 {
+        let client = client.clone();
+        tasks.spawn(async move {
+            client
+                .call_typed::<u32, u32>(
+                    ProgramVersion {
+                        program: 100_003,
+                        version: 3,
+                    },
+                    Procedure(1),
+                    &value,
+                )
+                .await
+        });
+    }
+
+    let mut results = Vec::with_capacity(CALLS);
+    while let Some(result) = tasks.join_next().await {
+        results.push(
+            result
+                .expect("task should join")
+                .expect("call should succeed"),
+        );
+    }
+    results.sort_unstable();
+
+    assert_eq!(results, (0..CALLS as u32).collect::<Vec<_>>());
+    server.await.expect("server task should complete");
+}
+
+#[tokio::test]
 async fn async_transport_honors_default_call_timeout() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -197,6 +260,127 @@ async fn async_transport_honors_default_call_timeout() {
         }
         other => panic!("expected call-timeout transport error, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn async_transport_discards_late_reply_and_preserves_connection() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let addr = listener.local_addr().expect("local addr");
+
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.expect("accept should succeed");
+        let (mut reader, mut writer) = stream.into_split();
+        let mut buffer = BytesMut::with_capacity(1024);
+
+        let first = next_message(&mut reader, &mut buffer).await;
+        tokio::time::sleep(Duration::from_millis(70)).await;
+        write_rpc_message(&mut writer, &reply(first.xid, request_payload(&first)))
+            .await
+            .expect("late reply should write");
+
+        let second = next_message(&mut reader, &mut buffer).await;
+        write_rpc_message(&mut writer, &reply(second.xid, request_payload(&second)))
+            .await
+            .expect("second reply should write");
+    });
+
+    let config = ClientConfig::new(addr)
+        .with_connect_timeout(Duration::from_secs(5))
+        .with_default_call_timeout(Duration::from_millis(50));
+    let transport = TokioAsyncClientTransport::connect(&config)
+        .await
+        .expect("client should connect");
+    let client = AsyncClient::new(config, transport);
+
+    let first_error = client
+        .call_typed::<u32, u32>(
+            ProgramVersion {
+                program: 100_003,
+                version: 3,
+            },
+            Procedure(1),
+            &11,
+        )
+        .await
+        .expect_err("first call should time out");
+    match first_error {
+        onc_rpc_runtime::RuntimeError::Transport(message) => {
+            assert!(
+                message.contains("call timeout"),
+                "unexpected message: {message}"
+            );
+        }
+        other => panic!("expected call-timeout error, got {other:?}"),
+    }
+
+    let second = client
+        .call_typed::<u32, u32>(
+            ProgramVersion {
+                program: 100_003,
+                version: 3,
+            },
+            Procedure(1),
+            &22,
+        )
+        .await
+        .expect("second call should succeed");
+
+    assert_eq!(second, 22);
+    server.await.expect("server task should complete");
+}
+
+#[tokio::test]
+async fn async_transport_reports_disconnect_to_all_pending_calls() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let addr = listener.local_addr().expect("local addr");
+
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.expect("accept should succeed");
+        let (mut reader, _) = stream.into_split();
+        let mut buffer = BytesMut::with_capacity(1024);
+        let _first = next_message(&mut reader, &mut buffer).await;
+        let _second = next_message(&mut reader, &mut buffer).await;
+        // Drop the connection without replying.
+    });
+
+    let config = ClientConfig::new(addr).with_connect_timeout(Duration::from_secs(5));
+    let transport = TokioAsyncClientTransport::connect(&config)
+        .await
+        .expect("client should connect");
+    let client = AsyncClient::new(config, transport);
+
+    let first = client.call_typed::<u32, u32>(
+        ProgramVersion {
+            program: 100_003,
+            version: 3,
+        },
+        Procedure(1),
+        &1_u32,
+    );
+    let second = client.call_typed::<u32, u32>(
+        ProgramVersion {
+            program: 100_003,
+            version: 3,
+        },
+        Procedure(1),
+        &2_u32,
+    );
+
+    let (first, second) = tokio::join!(first, second);
+    assert_eq!(
+        first.expect_err("first call should fail"),
+        onc_rpc_runtime::RuntimeError::ConnectionClosed
+    );
+    assert_eq!(
+        second.expect_err("second call should fail"),
+        onc_rpc_runtime::RuntimeError::ConnectionClosed
+    );
+
+    server.await.expect("server task should complete");
 }
 
 #[test]

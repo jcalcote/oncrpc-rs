@@ -3,14 +3,16 @@ use onc_rpc_runtime::async_trait as runtime_async_trait;
 use onc_rpc_runtime::{
     AcceptedReply, AcceptedStatus, AsyncClient, AsyncClientTransport, Client, ClientConfig,
     ClientTransport, MessageBody, OpaqueAuth, Procedure, ProgramVersion, ReplyBody, RpcMessage,
-    RuntimeError, Xid,
+    RuntimeError, TokioAsyncClientTransport, Xid,
 };
 use onc_rpc_server::{
-    AsyncDispatch, Dispatch, DispatchError, RequestContext, async_trait as server_async_trait,
+    AsyncDispatch, Dispatch, DispatchError, Program, RequestContext, ServerBuilder,
+    TokioAsyncServerTransport, async_trait as server_async_trait,
 };
 use onc_rpc_xdr::{XdrDecode, XdrEncode};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
+use tokio::task::JoinSet;
 
 #[allow(non_camel_case_types, non_snake_case, dead_code)]
 mod common_types {
@@ -290,4 +292,77 @@ async fn generated_async_typed_dispatch_unmarshals_request_and_marshals_reply_pa
         seen.lock().expect("mutex poisoned").as_slice(),
         &[expected_request]
     );
+}
+
+#[tokio::test]
+async fn generated_async_stubs_round_trip_over_real_tokio_transport() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut server = ServerBuilder::new()
+        .with_bind_addr(
+            "127.0.0.1:0"
+                .parse::<SocketAddr>()
+                .expect("socket addr should parse"),
+        )
+        .build_async();
+    server
+        .register(
+            Program {
+                number: 200001,
+                version: 1,
+            },
+            blob_service_basic_stubs::blob_service::blob_service_v1::async_server::BLOB_SERVICE_V1Dispatch::new(
+                AsyncTypedService { seen: seen.clone() },
+            ),
+        )
+        .expect("registration should succeed");
+
+    let transport = TokioAsyncServerTransport::bind(server)
+        .await
+        .expect("server should bind");
+    let addr = transport.local_addr().expect("local addr");
+    let serve = tokio::spawn(async move { transport.accept_once().await });
+
+    let config = ClientConfig::new(addr).with_connect_timeout(std::time::Duration::from_secs(5));
+    let client_transport = TokioAsyncClientTransport::connect(&config)
+        .await
+        .expect("client should connect");
+    let stub = Arc::new(
+        blob_service_basic_stubs::blob_service::blob_service_v1::async_client::BLOB_SERVICE_V1Client::new(
+            AsyncClient::new(config, client_transport),
+        ),
+    );
+
+    let mut tasks = JoinSet::new();
+    for job_id in 0..8_u64 {
+        let stub = stub.clone();
+        tasks.spawn(async move {
+            let mut request = sample_request();
+            request.job_id = job_id;
+            let reply = stub.blob_copy(request.clone()).await;
+            (request, reply)
+        });
+    }
+
+    let mut observed_ids = Vec::new();
+    while let Some(result) = tasks.join_next().await {
+        let (request, reply) = result.expect("task should join");
+        assert_eq!(reply.expect("stub call should succeed"), sample_reply());
+        observed_ids.push(request.job_id);
+    }
+    observed_ids.sort_unstable();
+
+    let mut seen_ids = seen
+        .lock()
+        .expect("mutex poisoned")
+        .iter()
+        .map(|request| request.job_id)
+        .collect::<Vec<_>>();
+    seen_ids.sort_unstable();
+    assert_eq!(seen_ids, observed_ids);
+
+    drop(stub);
+    serve
+        .await
+        .expect("server task should join")
+        .expect("server transport should complete");
 }

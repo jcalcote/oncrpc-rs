@@ -8,7 +8,10 @@ use onc_rpc_server::{
 };
 use onc_rpc_xdr::{XdrDecode, XdrEncode};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
+use tokio::task::JoinSet;
 
 struct SyncEchoDispatch;
 
@@ -43,6 +46,22 @@ impl AsyncDispatch for AsyncReorderingDispatch {
                 .to_xdr_bytes()
                 .map_err(|_| DispatchError::SystemError)?,
         ))
+    }
+}
+
+struct AsyncConcurrentDispatch {
+    current: Arc<AtomicUsize>,
+    max_seen: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl AsyncDispatch for AsyncConcurrentDispatch {
+    async fn dispatch(&self, request: RequestContext) -> Result<ResponsePayload, DispatchError> {
+        let in_flight = self.current.fetch_add(1, Ordering::SeqCst) + 1;
+        self.max_seen.fetch_max(in_flight, Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        self.current.fetch_sub(1, Ordering::SeqCst);
+        Ok(ResponsePayload::success(request.payload))
     }
 }
 
@@ -206,6 +225,80 @@ async fn async_server_transport_honors_worker_thread_limit() {
     assert!(
         started.elapsed() >= Duration::from_millis(45),
         "worker limit did not serialize request handling"
+    );
+
+    drop(client);
+    serve
+        .await
+        .expect("server task should join")
+        .expect("server transport should complete");
+}
+
+#[tokio::test]
+async fn async_server_transport_uses_multiple_workers_when_available() {
+    let current = Arc::new(AtomicUsize::new(0));
+    let max_seen = Arc::new(AtomicUsize::new(0));
+    let mut server = ServerBuilder::new()
+        .with_bind_addr(loopback_addr())
+        .with_selector_threads(2)
+        .with_worker_threads(4)
+        .build_async();
+    server
+        .register(
+            Program {
+                number: 100_003,
+                version: 3,
+            },
+            AsyncConcurrentDispatch {
+                current: current.clone(),
+                max_seen: max_seen.clone(),
+            },
+        )
+        .expect("registration should succeed");
+
+    let transport = TokioAsyncServerTransport::bind(server)
+        .await
+        .expect("server should bind");
+    let addr = transport.local_addr().expect("local addr");
+    let serve = tokio::spawn(async move { transport.accept_once().await });
+
+    let config = ClientConfig::new(addr).with_connect_timeout(Duration::from_secs(5));
+    let client_transport = TokioAsyncClientTransport::connect(&config)
+        .await
+        .expect("client should connect");
+    let client = Arc::new(AsyncClient::new(config, client_transport));
+    let mut tasks = JoinSet::new();
+
+    for value in 0..12_u32 {
+        let client = client.clone();
+        tasks.spawn(async move {
+            client
+                .call_typed::<u32, u32>(
+                    ProgramVersion {
+                        program: 100_003,
+                        version: 3,
+                    },
+                    Procedure(1),
+                    &value,
+                )
+                .await
+        });
+    }
+
+    let mut replies = Vec::new();
+    while let Some(result) = tasks.join_next().await {
+        replies.push(
+            result
+                .expect("task should join")
+                .expect("call should succeed"),
+        );
+    }
+    replies.sort_unstable();
+
+    assert_eq!(replies, (0..12_u32).collect::<Vec<_>>());
+    assert!(
+        max_seen.load(Ordering::SeqCst) > 1,
+        "worker pool never processed requests concurrently"
     );
 
     drop(client);
