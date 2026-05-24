@@ -166,7 +166,10 @@ cargo check --workspace
 
 ## Near-Term Priorities
 
-- deepen TCP runtime and server transport behavior beyond the current stub-facing contracts
+- continue hardening runtime/server behavior under real interoperability and
+  load
 - add per-call auth options to the generated/runtime API surface
 - improve `oncrpcgen` CLI help and consumer integration ergonomics
-- add interoperability tests against existing ONC RPC implementations
+- add `rpcbind` / portmap support
+- add RPC-over-TLS support
+- broaden examples and generated-code polish for downstream consumers
