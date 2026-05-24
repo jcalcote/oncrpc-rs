@@ -1,5 +1,5 @@
 [package]
-name = "onc-rpcgen"
+name = "onc-rpc-xdr"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,15 +9,8 @@ rust-version.workspace = true
 authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Core code generation for XDR types and ONC RPC client/server stubs."
+description = "Shared XDR serialization and deserialization support for generated ONC RPC code."
 
 [dependencies]
-clap.workspace = true
-thiserror.workspace = true
-
-[dev-dependencies]
-assert_cmd = "2.0"
 bytes.workspace = true
-onc-rpc-xdr = { path = "../onc-rpc-xdr" }
-predicates = "3.1"
-tempfile = "3.23"
+thiserror.workspace = true

@@ -1,0 +1,16 @@
+use bytes::Bytes;
+
+pub const REMOTE_HANDLE_SIZE: i64 = 32;
+
+pub type remote_handle_t = Bytes;
+
+pub mod nfs_support_program {
+    pub const PROGRAM: u32 = 300001;
+
+    pub mod nfs_support_v1 {
+        pub const VERSION: u32 = 1;
+        pub const NFS_PING: u32 = 0;
+    }
+
+}
+

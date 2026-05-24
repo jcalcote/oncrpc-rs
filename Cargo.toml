@@ -6,6 +6,7 @@ members = [
     "crates/onc-rpc-server",
     "crates/onc-rpc-tls",
     "crates/onc-rpc-wire",
+    "crates/onc-rpc-xdr",
     "crates/onc-rpcgen",
 ]
 resolver = "2"

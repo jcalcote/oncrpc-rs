@@ -1,8 +1,29 @@
+use onc_rpc_xdr::{XdrDecode, XdrEncode};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct copy_request_t {
-    pub job_id: job_id_t,
-    pub job_update: job_update_t,
-    pub source_instance: instance_info_t,
+    pub job_id: crate::common_types::job_id_t,
+    pub job_update: crate::transfer_types::job_update_t,
+    pub source_instance: crate::transfer_types::instance_info_t,
+}
+
+impl XdrEncode for copy_request_t {
+    fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {
+        self.job_id.encode_xdr(output)?;
+        self.job_update.encode_xdr(output)?;
+        self.source_instance.encode_xdr(output)?;
+        Ok(())
+    }
+}
+
+impl XdrDecode for copy_request_t {
+    fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+        Ok(Self {
+            job_id: <crate::common_types::job_id_t as XdrDecode>::decode_xdr(input)?,
+            job_update: <crate::transfer_types::job_update_t as XdrDecode>::decode_xdr(input)?,
+            source_instance: <crate::transfer_types::instance_info_t as XdrDecode>::decode_xdr(input)?,
+        })
+    }
 }
 
 pub mod blob_service {

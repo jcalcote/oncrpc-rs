@@ -1,4 +1,6 @@
-use onc_rpcgen::{emit_rust_types, fixture_root, parse_x_file};
+use onc_rpcgen::{
+    LoadOptions, emit_rust_types, fixture_root, generate_from_x_file_with_options, parse_x_file,
+};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -13,15 +15,27 @@ fn emitted_fixture(path: &str) -> String {
     emit_rust_types(&schema).expect("fixture should emit")
 }
 
+fn generated_module_fixture(path: &str, module: &str) -> String {
+    generate_from_x_file_with_options(
+        fixture(path),
+        &LoadOptions {
+            include_dirs: vec![fixture("xdr/real")],
+        },
+        &Default::default(),
+    )
+    .expect("fixture should generate")
+    .modules
+    .into_iter()
+    .find(|output| output.module_name == module)
+    .and_then(|output| output.types)
+    .expect("requested generated module should exist")
+}
+
 #[test]
 fn emission_snapshot_matches_expected_output_for_real_fixtures() {
     assert_snapshot(
         "xdr/real/storage_types_basic.x",
         "expected/storage_types_basic.rs.txt",
-    );
-    assert_snapshot(
-        "xdr/real/blob_service_basic.x",
-        "expected/blob_service_basic.rs.txt",
     );
     assert_snapshot(
         "xdr/synthetic/rfc4506_parser_features.x",
@@ -46,15 +60,15 @@ fn emission_maps_real_subset_to_expected_rust_shapes() {
 
 #[test]
 fn emission_is_deterministic_for_same_schema() {
-    let first = emitted_fixture("xdr/real/blob_service_basic.x");
-    let second = emitted_fixture("xdr/real/blob_service_basic.x");
+    let first = generated_module_fixture("xdr/real/blob_service_basic.x", "blob_service_basic");
+    let second = generated_module_fixture("xdr/real/blob_service_basic.x", "blob_service_basic");
 
     assert_eq!(first, second);
 }
 
 #[test]
 fn emission_includes_program_version_and_procedure_constants() {
-    let emitted = emitted_fixture("xdr/real/blob_service_basic.x");
+    let emitted = generated_module_fixture("xdr/real/blob_service_basic.x", "blob_service_basic");
 
     assert!(emitted.contains("pub mod blob_service {"));
     assert!(emitted.contains("pub const PROGRAM: u32 = 200001;"));
@@ -77,8 +91,24 @@ fn emission_covers_remaining_rfc4506_constructs() {
     assert!(emitted.contains("Case1 {"));
     assert!(emitted.contains("Case2 {"));
     assert!(emitted.contains("Case3 {"));
-    assert!(emitted.contains("Default,"));
+    assert!(emitted.contains("Default {"));
     assert!(emitted.contains("pub enum inline_enum_t {"));
+    assert!(emitted.contains("impl XdrEncode for payload_t {"));
+    assert!(emitted.contains("impl XdrDecode for payload_t {"));
+}
+
+#[test]
+fn emission_generates_serializers_for_real_and_cross_module_types() {
+    let emitted = emitted_fixture("xdr/real/storage_types_basic.x");
+    let blob = generated_module_fixture("xdr/real/blob_service_basic.x", "blob_service_basic");
+
+    assert!(emitted.contains("use onc_rpc_xdr::{XdrDecode, XdrEncode};"));
+    assert!(emitted.contains("impl XdrEncode for timestamp_t {"));
+    assert!(emitted.contains("impl XdrDecode for status_t {"));
+
+    assert!(blob.contains("impl XdrEncode for copy_request_t {"));
+    assert!(blob.contains("crate::common_types::job_id_t"));
+    assert!(blob.contains("crate::transfer_types::instance_info_t"));
 }
 
 fn assert_snapshot(fixture_path: &str, expected_path: &str) {

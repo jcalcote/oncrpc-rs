@@ -5,6 +5,7 @@
 `onc-rpcgen` is responsible for turning `.x` inputs into:
 
 - Rust XDR payload types
+- Rust XDR serialization and deserialization implementations
 - ONC RPC program/version/procedure constants
 - client stubs
 - server traits and dispatch glue
@@ -68,6 +69,7 @@ Naming rules should be documented in code or tests when first introduced.
 Generated code may depend on:
 
 - `onc-rpc-wire`
+- `onc-rpc-xdr`
 - `onc-rpc-runtime`
 - `onc-rpc-server`
 - `onc-rpc-auth`

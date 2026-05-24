@@ -1,3 +1,5 @@
+use onc_rpc_xdr::{XdrDecode, XdrEncode};
+
 pub const OCTAL_BOUND: i64 = 8;
 
 pub type ratio_t = f32;
@@ -12,6 +14,23 @@ pub struct full_record_t {
     pub next: Option<Box<ratio_t>>,
 }
 
+impl XdrEncode for full_record_t {
+    fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {
+        onc_rpc_xdr::write_fixed_opaque(output, &self.fixed);
+        self.next.encode_xdr(output)?;
+        Ok(())
+    }
+}
+
+impl XdrDecode for full_record_t {
+    fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+        Ok(Self {
+            fixed: <[u8; OCTAL_BOUND as usize] as XdrDecode>::decode_xdr(input)?,
+            next: Option::<Box<ratio_t>>::decode_xdr(input)?,
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum payload_t {
     Case1 {
@@ -23,7 +42,47 @@ pub enum payload_t {
     Case3 {
         text: String,
     },
-    Default,
+    Default {
+        discriminant: i32,
+    },
+}
+
+impl XdrEncode for payload_t {
+    fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {
+        match self {
+            Self::Case1 { single } => {
+                (1).encode_xdr(output)?;
+                single.encode_xdr(output)?;
+                Ok(())
+            }
+            Self::Case2 { text } => {
+                (2).encode_xdr(output)?;
+                text.encode_xdr(output)?;
+                Ok(())
+            }
+            Self::Case3 { text } => {
+                (3).encode_xdr(output)?;
+                text.encode_xdr(output)?;
+                Ok(())
+            }
+            Self::Default { discriminant } => {
+                discriminant.encode_xdr(output)?;
+                Ok(())
+            }
+        }
+    }
+}
+
+impl XdrDecode for payload_t {
+    fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+        let discriminant = <i32 as XdrDecode>::decode_xdr(input)?;
+        match discriminant {
+            1 => Ok(Self::Case1 { single: <i32 as XdrDecode>::decode_xdr(input)? }),
+            2 => Ok(Self::Case2 { text: String::decode_xdr(input)? }),
+            3 => Ok(Self::Case3 { text: String::decode_xdr(input)? }),
+            discriminant => Ok(Self::Default { discriminant }),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,5 +90,21 @@ pub enum payload_t {
 pub enum inline_enum_t {
     VALUE_ONE = 1,
     VALUE_TWO = 2,
+}
+
+impl XdrEncode for inline_enum_t {
+    fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {
+        (*self as i32).encode_xdr(output)
+    }
+}
+
+impl XdrDecode for inline_enum_t {
+    fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+        match i32::decode_xdr(input)? {
+            1 => Ok(Self::VALUE_ONE),
+            2 => Ok(Self::VALUE_TWO),
+            other => Err(onc_rpc_xdr::XdrError::InvalidEnum(other)),
+        }
+    }
 }
 

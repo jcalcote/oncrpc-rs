@@ -1,0 +1,10 @@
+use bytes::Bytes;
+
+pub const HANDLE_SIZE: i64 = 64;
+
+pub type job_id_t = u64;
+
+pub type status_code_t = u32;
+
+pub type local_handle_t = Bytes;
+

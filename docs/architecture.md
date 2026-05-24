@@ -104,11 +104,24 @@ runtime layer rather than redefine it.
 Owns `.x`-driven generation for both halves of the protocol:
 
 - XDR types
+- XDR serialization and deserialization implementations
 - ONC RPC program/version/procedure constants
 - client stubs
 - server traits and dispatch stubs
 
 This is a core crate, not an optional add-on.
+
+### `onc-rpc-xdr`
+
+Owns shared XDR serialization support used by generated code:
+
+- `XdrEncode` and `XdrDecode` traits
+- scalar and collection codec helpers
+- opaque/string padding and alignment rules
+- fixed and variable array helpers
+
+This crate exists to keep XDR payload encoding distinct from ONC RPC envelope
+encoding in `onc-rpc-wire`.
 
 ### `onc-rpc-bind`
 

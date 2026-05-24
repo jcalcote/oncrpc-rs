@@ -1,3 +1,5 @@
+use onc_rpc_xdr::{XdrDecode, XdrEncode};
+
 pub type job_update_t = u32;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -5,8 +7,38 @@ pub struct instance_info_t {
     pub source_handle: crate::nfs_support::remote_handle_t,
 }
 
+impl XdrEncode for instance_info_t {
+    fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {
+        self.source_handle.encode_xdr(output)?;
+        Ok(())
+    }
+}
+
+impl XdrDecode for instance_info_t {
+    fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+        Ok(Self {
+            source_handle: <crate::nfs_support::remote_handle_t as XdrDecode>::decode_xdr(input)?,
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct job_result_t {
     pub status: crate::common_types::status_code_t,
+}
+
+impl XdrEncode for job_result_t {
+    fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {
+        self.status.encode_xdr(output)?;
+        Ok(())
+    }
+}
+
+impl XdrDecode for job_result_t {
+    fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+        Ok(Self {
+            status: <crate::common_types::status_code_t as XdrDecode>::decode_xdr(input)?,
+        })
+    }
 }
 

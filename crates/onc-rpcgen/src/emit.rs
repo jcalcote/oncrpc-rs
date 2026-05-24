@@ -72,7 +72,13 @@ impl TypeEmitter {
     fn new(schema: &Schema) -> Self {
         let mut out = String::new();
         if schema_uses_bytes(schema) {
-            out.push_str("use bytes::Bytes;\n\n");
+            out.push_str("use bytes::Bytes;\n");
+        }
+        if schema_uses_xdr_traits(schema) {
+            out.push_str("use onc_rpc_xdr::{XdrDecode, XdrEncode};\n");
+        }
+        if schema_uses_bytes(schema) || schema_uses_xdr_traits(schema) {
+            out.push('\n');
         }
         Self {
             out,
@@ -87,7 +93,13 @@ impl TypeEmitter {
     fn new_for_module(module: &LoadedModule, loaded: &LoadedSchemaSet) -> Self {
         let mut out = String::new();
         if schema_uses_bytes(&module.schema) {
-            out.push_str("use bytes::Bytes;\n\n");
+            out.push_str("use bytes::Bytes;\n");
+        }
+        if schema_uses_xdr_traits(&module.schema) {
+            out.push_str("use onc_rpc_xdr::{XdrDecode, XdrEncode};\n");
+        }
+        if schema_uses_bytes(&module.schema) || schema_uses_xdr_traits(&module.schema) {
+            out.push('\n');
         }
         Self {
             out,
@@ -250,6 +262,7 @@ impl TypeEmitter {
         }
         line(indent, &mut self.out, format_args!("}}"));
         self.out.push('\n');
+        self.emit_struct_xdr_impl(name, body, indent)?;
         Ok(())
     }
 
@@ -280,6 +293,7 @@ impl TypeEmitter {
         }
         line(indent, &mut self.out, format_args!("}}"));
         self.out.push('\n');
+        self.emit_enum_xdr_impl(name, body, indent);
         Ok(())
     }
 
@@ -304,6 +318,12 @@ impl TypeEmitter {
             &mut self.out,
             DeriveKind::Struct,
         );
+        let discriminant_type = self.rust_type_for_declaration(
+            &body.discriminant.type_spec,
+            &body.discriminant.declarator,
+            &format!("{name}_discriminant"),
+            indent,
+        )?;
         line(indent, &mut self.out, format_args!("pub enum {} {{", name));
         for arm in &body.arms {
             let hint = format!("{}_{}", name, arm.declaration.declarator.name);
@@ -315,7 +335,26 @@ impl TypeEmitter {
             )?;
             for label in &arm.labels {
                 let variant_name = union_variant_name(label);
-                if rust_type == "()" {
+                if matches!(label, UnionCaseLabel::Default) {
+                    line(
+                        indent + 4,
+                        &mut self.out,
+                        format_args!("{} {{", variant_name),
+                    );
+                    line(
+                        indent + 8,
+                        &mut self.out,
+                        format_args!("discriminant: {},", discriminant_type),
+                    );
+                    if rust_type != "()" {
+                        line(
+                            indent + 8,
+                            &mut self.out,
+                            format_args!("{}: {},", arm.declaration.declarator.name, rust_type),
+                        );
+                    }
+                    line(indent + 4, &mut self.out, format_args!("}},"));
+                } else if rust_type == "()" {
                     line(indent + 4, &mut self.out, format_args!("{},", variant_name));
                 } else {
                     line(
@@ -334,6 +373,7 @@ impl TypeEmitter {
         }
         line(indent, &mut self.out, format_args!("}}"));
         self.out.push('\n');
+        self.emit_union_xdr_impl(name, body, &discriminant_type, indent)?;
         Ok(())
     }
 
@@ -567,6 +607,456 @@ impl TypeEmitter {
             ValueExpr::Identifier(name) => {
                 Ok(format!("{} as usize", self.qualify_const_name(name)))
             }
+        }
+    }
+
+    fn emit_struct_xdr_impl(
+        &mut self,
+        name: &str,
+        body: &StructBody,
+        indent: usize,
+    ) -> Result<(), GeneratorError> {
+        line(
+            indent,
+            &mut self.out,
+            format_args!("impl XdrEncode for {} {{", name),
+        );
+        line(
+            indent + 4,
+            &mut self.out,
+            format_args!(
+                "fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {{"
+            ),
+        );
+        for declaration in &body.declarations {
+            self.emit_encode_declaration(
+                &declaration.type_spec,
+                &declaration.declarator,
+                &format!("self.{}", declaration.declarator.name),
+                indent + 8,
+            )?;
+        }
+        line(indent + 8, &mut self.out, format_args!("Ok(())"));
+        line(indent + 4, &mut self.out, format_args!("}}"));
+        line(indent, &mut self.out, format_args!("}}"));
+        self.out.push('\n');
+
+        line(
+            indent,
+            &mut self.out,
+            format_args!("impl XdrDecode for {} {{", name),
+        );
+        line(
+            indent + 4,
+            &mut self.out,
+            format_args!(
+                "fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {{"
+            ),
+        );
+        line(indent + 8, &mut self.out, format_args!("Ok(Self {{"));
+        for declaration in &body.declarations {
+            let hint = format!("{}_{}", name, declaration.declarator.name);
+            let decode = self.decode_declaration_expr(
+                &declaration.type_spec,
+                &declaration.declarator,
+                &hint,
+                indent + 8,
+            )?;
+            line(
+                indent + 12,
+                &mut self.out,
+                format_args!("{}: {},", declaration.declarator.name, decode),
+            );
+        }
+        line(indent + 8, &mut self.out, format_args!("}})"));
+        line(indent + 4, &mut self.out, format_args!("}}"));
+        line(indent, &mut self.out, format_args!("}}"));
+        self.out.push('\n');
+        Ok(())
+    }
+
+    fn emit_enum_xdr_impl(&mut self, name: &str, body: &EnumBody, indent: usize) {
+        line(
+            indent,
+            &mut self.out,
+            format_args!("impl XdrEncode for {} {{", name),
+        );
+        line(
+            indent + 4,
+            &mut self.out,
+            format_args!(
+                "fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {{"
+            ),
+        );
+        line(
+            indent + 8,
+            &mut self.out,
+            format_args!("(*self as i32).encode_xdr(output)"),
+        );
+        line(indent + 4, &mut self.out, format_args!("}}"));
+        line(indent, &mut self.out, format_args!("}}"));
+        self.out.push('\n');
+
+        line(
+            indent,
+            &mut self.out,
+            format_args!("impl XdrDecode for {} {{", name),
+        );
+        line(
+            indent + 4,
+            &mut self.out,
+            format_args!(
+                "fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {{"
+            ),
+        );
+        line(
+            indent + 8,
+            &mut self.out,
+            format_args!("match i32::decode_xdr(input)? {{"),
+        );
+        for variant in &body.variants {
+            let value = self.render_value(&variant.value);
+            line(
+                indent + 12,
+                &mut self.out,
+                format_args!("{} => Ok(Self::{}),", value, variant.name),
+            );
+        }
+        line(
+            indent + 12,
+            &mut self.out,
+            format_args!("other => Err(onc_rpc_xdr::XdrError::InvalidEnum(other)),"),
+        );
+        line(indent + 8, &mut self.out, format_args!("}}"));
+        line(indent + 4, &mut self.out, format_args!("}}"));
+        line(indent, &mut self.out, format_args!("}}"));
+        self.out.push('\n');
+    }
+
+    fn emit_union_xdr_impl(
+        &mut self,
+        name: &str,
+        body: &UnionBody,
+        discriminant_type: &str,
+        indent: usize,
+    ) -> Result<(), GeneratorError> {
+        line(
+            indent,
+            &mut self.out,
+            format_args!("impl XdrEncode for {} {{", name),
+        );
+        line(
+            indent + 4,
+            &mut self.out,
+            format_args!(
+                "fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {{"
+            ),
+        );
+        line(indent + 8, &mut self.out, format_args!("match self {{"));
+        for arm in &body.arms {
+            let hint = format!("{}_{}", name, arm.declaration.declarator.name);
+            let rust_type = self.rust_type_for_declaration(
+                &arm.declaration.type_spec,
+                &arm.declaration.declarator,
+                &hint,
+                indent,
+            )?;
+            for label in &arm.labels {
+                let variant_name = union_variant_name(label);
+                let disc = self.render_union_label(label);
+                if matches!(label, UnionCaseLabel::Default) {
+                    if rust_type == "()" {
+                        line(
+                            indent + 12,
+                            &mut self.out,
+                            format_args!("Self::{} {{ discriminant }} => {{", variant_name),
+                        );
+                        line(
+                            indent + 16,
+                            &mut self.out,
+                            format_args!("discriminant.encode_xdr(output)?;"),
+                        );
+                    } else {
+                        line(
+                            indent + 12,
+                            &mut self.out,
+                            format_args!(
+                                "Self::{} {{ discriminant, {} }} => {{",
+                                variant_name, arm.declaration.declarator.name
+                            ),
+                        );
+                        line(
+                            indent + 16,
+                            &mut self.out,
+                            format_args!("discriminant.encode_xdr(output)?;"),
+                        );
+                        self.emit_encode_declaration(
+                            &arm.declaration.type_spec,
+                            &arm.declaration.declarator,
+                            arm.declaration.declarator.name.as_str(),
+                            indent + 16,
+                        )?;
+                    }
+                } else if rust_type == "()" {
+                    line(
+                        indent + 12,
+                        &mut self.out,
+                        format_args!("Self::{} => {{", variant_name),
+                    );
+                    line(
+                        indent + 16,
+                        &mut self.out,
+                        format_args!("({}).encode_xdr(output)?;", disc),
+                    );
+                } else {
+                    line(
+                        indent + 12,
+                        &mut self.out,
+                        format_args!(
+                            "Self::{} {{ {} }} => {{",
+                            variant_name, arm.declaration.declarator.name
+                        ),
+                    );
+                    line(
+                        indent + 16,
+                        &mut self.out,
+                        format_args!("({}).encode_xdr(output)?;", disc),
+                    );
+                    self.emit_encode_declaration(
+                        &arm.declaration.type_spec,
+                        &arm.declaration.declarator,
+                        arm.declaration.declarator.name.as_str(),
+                        indent + 16,
+                    )?;
+                }
+                line(indent + 16, &mut self.out, format_args!("Ok(())"));
+                line(indent + 12, &mut self.out, format_args!("}}"));
+            }
+        }
+        line(indent + 8, &mut self.out, format_args!("}}"));
+        line(indent + 4, &mut self.out, format_args!("}}"));
+        line(indent, &mut self.out, format_args!("}}"));
+        self.out.push('\n');
+
+        line(
+            indent,
+            &mut self.out,
+            format_args!("impl XdrDecode for {} {{", name),
+        );
+        line(
+            indent + 4,
+            &mut self.out,
+            format_args!(
+                "fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {{"
+            ),
+        );
+        line(
+            indent + 8,
+            &mut self.out,
+            format_args!(
+                "let discriminant = <{} as XdrDecode>::decode_xdr(input)?;",
+                discriminant_type
+            ),
+        );
+        line(
+            indent + 8,
+            &mut self.out,
+            format_args!("match discriminant {{"),
+        );
+        for arm in &body.arms {
+            let hint = format!("{}_{}", name, arm.declaration.declarator.name);
+            let rust_type = self.rust_type_for_declaration(
+                &arm.declaration.type_spec,
+                &arm.declaration.declarator,
+                &hint,
+                indent,
+            )?;
+            let default = arm
+                .labels
+                .iter()
+                .any(|label| matches!(label, UnionCaseLabel::Default));
+            if default {
+                continue;
+            }
+            for label in &arm.labels {
+                let disc = self.render_union_label(label);
+                let variant_name = union_variant_name(label);
+                if rust_type == "()" {
+                    line(
+                        indent + 12,
+                        &mut self.out,
+                        format_args!("{} => Ok(Self::{}),", disc, variant_name),
+                    );
+                } else {
+                    let decode = self.decode_declaration_expr(
+                        &arm.declaration.type_spec,
+                        &arm.declaration.declarator,
+                        &hint,
+                        indent + 12,
+                    )?;
+                    line(
+                        indent + 12,
+                        &mut self.out,
+                        format_args!(
+                            "{} => Ok(Self::{} {{ {}: {} }}),",
+                            disc, variant_name, arm.declaration.declarator.name, decode
+                        ),
+                    );
+                }
+            }
+        }
+        if let Some(default_arm) = body.arms.iter().find(|arm| {
+            arm.labels
+                .iter()
+                .any(|label| matches!(label, UnionCaseLabel::Default))
+        }) {
+            let hint = format!("{}_{}", name, default_arm.declaration.declarator.name);
+            let rust_type = self.rust_type_for_declaration(
+                &default_arm.declaration.type_spec,
+                &default_arm.declaration.declarator,
+                &hint,
+                indent,
+            )?;
+            if rust_type == "()" {
+                line(
+                    indent + 12,
+                    &mut self.out,
+                    format_args!("discriminant => Ok(Self::Default {{ discriminant }}),"),
+                );
+            } else {
+                let decode = self.decode_declaration_expr(
+                    &default_arm.declaration.type_spec,
+                    &default_arm.declaration.declarator,
+                    &hint,
+                    indent + 12,
+                )?;
+                line(
+                    indent + 12,
+                    &mut self.out,
+                    format_args!(
+                        "discriminant => Ok(Self::Default {{ discriminant, {}: {} }}),",
+                        default_arm.declaration.declarator.name, decode
+                    ),
+                );
+            }
+        } else {
+            line(
+                indent + 12,
+                &mut self.out,
+                format_args!("_ => Err(onc_rpc_xdr::XdrError::InvalidEnum(0)),"),
+            );
+        }
+        line(indent + 8, &mut self.out, format_args!("}}"));
+        line(indent + 4, &mut self.out, format_args!("}}"));
+        line(indent, &mut self.out, format_args!("}}"));
+        self.out.push('\n');
+        Ok(())
+    }
+
+    fn emit_encode_declaration(
+        &mut self,
+        target: &TypeSpec,
+        declarator: &Declarator,
+        access: &str,
+        indent: usize,
+    ) -> Result<(), GeneratorError> {
+        match &declarator.modifier {
+            Some(DeclaratorModifier::VariableArray(_)) => match target {
+                TypeSpec::Opaque | TypeSpec::String => {
+                    line(
+                        indent,
+                        &mut self.out,
+                        format_args!("{access}.encode_xdr(output)?;"),
+                    );
+                }
+                _ => {
+                    line(
+                        indent,
+                        &mut self.out,
+                        format_args!("({access}.len() as u32).encode_xdr(output)?;"),
+                    );
+                    line(
+                        indent,
+                        &mut self.out,
+                        format_args!("for value in &{access} {{"),
+                    );
+                    line(
+                        indent + 4,
+                        &mut self.out,
+                        format_args!("value.encode_xdr(output)?;"),
+                    );
+                    line(indent, &mut self.out, format_args!("}}"));
+                }
+            },
+            Some(DeclaratorModifier::FixedArray(_)) => match target {
+                TypeSpec::Opaque => {
+                    line(
+                        indent,
+                        &mut self.out,
+                        format_args!("onc_rpc_xdr::write_fixed_opaque(output, &{access});"),
+                    );
+                }
+                _ => {
+                    line(
+                        indent,
+                        &mut self.out,
+                        format_args!("for value in &{access} {{"),
+                    );
+                    line(
+                        indent + 4,
+                        &mut self.out,
+                        format_args!("value.encode_xdr(output)?;"),
+                    );
+                    line(indent, &mut self.out, format_args!("}}"));
+                }
+            },
+            Some(DeclaratorModifier::Optional) | None => {
+                line(
+                    indent,
+                    &mut self.out,
+                    format_args!("{access}.encode_xdr(output)?;"),
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn decode_declaration_expr(
+        &mut self,
+        target: &TypeSpec,
+        declarator: &Declarator,
+        hint: &str,
+        indent: usize,
+    ) -> Result<String, GeneratorError> {
+        let base = self.rust_type_for_base(target, hint, indent)?;
+        match &declarator.modifier {
+            Some(DeclaratorModifier::VariableArray(_)) => match target {
+                TypeSpec::Opaque => Ok("bytes::Bytes::decode_xdr(input)?".to_string()),
+                TypeSpec::String => Ok("String::decode_xdr(input)?".to_string()),
+                _ => Ok(format!("Vec::<{}>::decode_xdr(input)?", base)),
+            },
+            Some(DeclaratorModifier::FixedArray(bound)) => match target {
+                TypeSpec::Opaque => Ok(format!(
+                    "<[u8; {}] as XdrDecode>::decode_xdr(input)?",
+                    self.render_array_bound(bound)?
+                )),
+                _ => Ok(format!(
+                    "onc_rpc_xdr::decode_fixed_array::<{}, {}>(input)?",
+                    base,
+                    self.render_array_bound(bound)?
+                )),
+            },
+            Some(DeclaratorModifier::Optional) => {
+                Ok(format!("Option::<Box<{}>>::decode_xdr(input)?", base))
+            }
+            None => Ok(format!("<{} as XdrDecode>::decode_xdr(input)?", base)),
+        }
+    }
+
+    fn render_union_label(&self, label: &UnionCaseLabel) -> String {
+        match label {
+            UnionCaseLabel::Case(value) => self.render_value(value),
+            UnionCaseLabel::Default => "discriminant".to_string(),
         }
     }
 }
@@ -844,6 +1334,10 @@ fn schema_uses_bytes(schema: &Schema) -> bool {
     schema.items.iter().any(item_uses_bytes)
 }
 
+fn schema_uses_xdr_traits(schema: &Schema) -> bool {
+    schema.items.iter().any(item_uses_xdr_traits)
+}
+
 fn item_uses_bytes(item: &Item) -> bool {
     match item {
         Item::Const(_) | Item::Program(_) => false,
@@ -858,6 +1352,21 @@ fn item_uses_bytes(item: &Item) -> bool {
             declaration_uses_bytes(&arm.declaration.type_spec, &arm.declaration.declarator)
         }),
     }
+}
+
+fn item_uses_xdr_traits(item: &Item) -> bool {
+    match item {
+        Item::Struct(_) | Item::Enum(_) | Item::Union(_) => true,
+        Item::Typedef(item) => type_spec_uses_xdr_traits(&item.target),
+        Item::Const(_) | Item::Program(_) => false,
+    }
+}
+
+fn type_spec_uses_xdr_traits(target: &TypeSpec) -> bool {
+    matches!(
+        target,
+        TypeSpec::Enum(_) | TypeSpec::Struct(_) | TypeSpec::Union(_)
+    )
 }
 
 fn declaration_uses_bytes(target: &TypeSpec, declarator: &Declarator) -> bool {
