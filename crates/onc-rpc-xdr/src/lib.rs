@@ -3,7 +3,7 @@ use std::any::TypeId;
 use std::str;
 use thiserror::Error;
 
-#[derive(Debug, Error, PartialEq, Eq)]
+#[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum XdrError {
     #[error("unexpected end of input while reading {needed} bytes")]
     UnexpectedEof { needed: usize },

@@ -19,6 +19,8 @@ Current architectural priorities are:
 
 - fidelity to the existing `.x` files used by consumers
 - predictable, explicit wire behavior
+- minimal buffer copying along transport and payload paths
+- high concurrency and throughput on shared client and server connections
 - generated code that is practical to call from application code
 - modules that are directly testable in isolation
 - narrow, well-separated crate responsibilities
@@ -77,9 +79,32 @@ Owns client-side transport/runtime behavior:
 - request/reply correlation
 - TCP record framing and reassembly
 - synchronous and asynchronous client call handling
+- concurrent in-flight request handling on shared client connections
 
 This crate should be TCP-first. Optional discovery layers such as `rpcbind`
 must not shape the core runtime abstractions.
+
+Runtime transport should prefer zero-copy or minimal-copy buffer handling where
+the protocol shape allows it. In practice that means:
+
+- prefer `bytes::Bytes` / `bytes::BytesMut` ownership through transport paths
+- prefer reusable read buffers over repeated allocation
+- avoid reconstructing payload buffers when a borrowed or sliced view is
+  sufficient
+- accept bounded assembly buffering where ONC RPC TCP fragmentation makes it
+  unavoidable, but do not introduce extra copies beyond that requirement
+
+Runtime transport should also treat throughput and concurrency as first-class
+requirements. In practice that means:
+
+- a single shared client connection must support multiple concurrent in-flight
+  requests correlated by XID
+- throughput must not depend on client-instance pooling as a workaround for
+  hidden single-threaded call paths
+- public client types should be safe to share across threads when the
+  underlying transport supports it
+- synchronous convenience layers must not silently collapse concurrent callers
+  onto one serialized execution path
 
 ### `onc-rpc-server`
 
@@ -91,9 +116,20 @@ Owns server-side runtime behavior:
 - lifecycle management
 - integration with the runtime and wire layers
 - synchronous and asynchronous dispatch contracts
+- concurrent request handling and reply emission over shared connections
 
 Server registration should center on explicit `{program, version}` ownership and
 generated dispatch glue from `onc-rpcgen`.
+
+Server transport should treat concurrency as a first-class requirement. In
+practice that means:
+
+- one connection may carry multiple in-flight requests whose replies are
+  produced asynchronously
+- selector and worker usage should allow many requests and replies to progress
+  concurrently rather than funneling all work through a single execution lane
+- generated dispatch glue must remain compatible with highly concurrent caller
+  behavior in real Hammerspace components
 
 ### `onc-rpc-tls`
 
@@ -191,6 +227,10 @@ The project should keep them separated conceptually and in code:
 
 This separation is important both for crate structure and for generator design.
 
+It is also important for buffer ownership: ONC RPC transport framing and XDR
+payload handling should preserve buffer reuse and avoid unnecessary copying
+across the boundary between envelope handling and payload decoding.
+
 ## Testability Constraint
 
 Modules should be designed so they are testable in isolation.
@@ -203,6 +243,36 @@ That should influence API and implementation choices in practical ways:
 - keep generated code testable without requiring a live network stack
 - make runtime and dispatch behavior observable with deterministic inputs and
   outputs
+
+## Buffer Ownership Constraint
+
+Transport and serialization code should prefer zero-copy or minimal-copy data
+flow by default.
+
+This should influence implementation choices in practical ways:
+
+- favor `Bytes` / `BytesMut` over `Vec<u8>` when shared slicing or freezing is
+  useful
+- reuse buffers across read and write operations where safe
+- keep fragmented-record reassembly to the minimum necessary copy boundary
+- avoid converting between owned byte containers gratuitously
+- treat unnecessary payload copying as a design issue, not just a micro-
+  optimization opportunity
+
+## Thread-Safety Constraint
+
+Client and server runtime types should be designed to be safely shareable across
+threads when their public contracts imply shared use.
+
+This should influence API and implementation choices in practical ways:
+
+- shared client instances must not require external pooling merely to obtain
+  concurrent request throughput
+- request correlation state must remain correct under concurrent access
+- write-side serialization should protect wire integrity without serializing
+  independent request lifecycles unnecessarily
+- server-side dispatch and reply paths should preserve correctness under many
+  concurrent in-flight operations
 
 ## Async Contract
 

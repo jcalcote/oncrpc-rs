@@ -696,7 +696,7 @@ fn expect_end<T>(input: &mut &[u8], value: T) -> Result<T, WireError> {
     }
 }
 
-#[derive(Debug, Error, PartialEq, Eq)]
+#[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum WireError {
     #[error("unexpected end of input: need {needed} bytes, have {remaining}")]
     UnexpectedEof { needed: usize, remaining: usize },

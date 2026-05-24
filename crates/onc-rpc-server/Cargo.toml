@@ -18,3 +18,6 @@ thiserror.workspace = true
 tokio.workspace = true
 onc-rpc-runtime = { path = "../onc-rpc-runtime" }
 onc-rpc-wire = { path = "../onc-rpc-wire" }
+
+[dev-dependencies]
+onc-rpc-xdr = { path = "../onc-rpc-xdr" }

@@ -1,5 +1,7 @@
 //! Minimal server-side ONC RPC contracts for generated dispatch stubs.
 
+mod transport;
+
 pub use async_trait::async_trait;
 use bytes::Bytes;
 use onc_rpc_runtime::{
@@ -10,6 +12,8 @@ use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use thiserror::Error;
+
+pub use transport::{ServerTransportError, TokioAsyncServerTransport, TokioServerTransport};
 
 type DispatchResolution = (Xid, RequestContext, Option<Arc<dyn Dispatch>>);
 type AsyncDispatchResolution = (Xid, RequestContext, Option<Arc<dyn AsyncDispatch>>);

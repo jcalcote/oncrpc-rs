@@ -1,16 +1,22 @@
 //! Minimal client-side ONC RPC contracts for generated stubs.
 
+mod transport;
+
 pub use async_trait::async_trait;
-use bytes::Bytes;
+use bytes::{Buf, Bytes, BytesMut};
 pub use onc_rpc_wire::{
-    AcceptedReply, AcceptedStatus, AuthStat, MessageBody, OpaqueAuth, Procedure, ProgramVersion,
-    RecordMarker, RecordRead, RejectedReply, ReplyBody, RpcMessage, VersionRange, WireError, Xid,
+    AcceptedReply, AcceptedStatus, AuthStat, MAX_FRAGMENT_LEN, MessageBody, OpaqueAuth, Procedure,
+    ProgramVersion, RecordMarker, RejectedReply, ReplyBody, RpcMessage, VersionRange, WireError,
+    Xid, fragment_record,
 };
 use onc_rpc_xdr::{XdrDecode, XdrEncode};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 use thiserror::Error;
+use tokio::io::{AsyncWrite, AsyncWriteExt};
+
+pub use transport::{TokioAsyncClientTransport, TokioClientTransport};
 
 #[derive(Debug, Clone)]
 pub struct ClientConfig {
@@ -72,10 +78,14 @@ pub trait AsyncClientTransport: Send + Sync + 'static {
     async fn call(&self, request: RpcMessage) -> Result<RpcMessage, RuntimeError>;
 }
 
-#[derive(Debug, Error, PartialEq, Eq)]
+#[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum RuntimeError {
     #[error("transport failure: {0}")]
     Transport(String),
+    #[error("connection closed before a complete reply was received")]
+    ConnectionClosed,
+    #[error("wire error: {0}")]
+    Wire(WireError),
     #[error("response xid mismatch: expected {expected:?}, got {actual:?}")]
     XidMismatch { expected: Xid, actual: Xid },
     #[error("received an rpc call message where a reply was expected")]
@@ -247,6 +257,114 @@ fn handle_reply(xid: Xid, reply: RpcMessage) -> Result<CallResponse, RuntimeErro
             Err(RuntimeError::AuthError(status))
         }
     }
+}
+
+pub fn try_decode_message_from_buffer(
+    buffer: &mut BytesMut,
+) -> Result<Option<RpcMessage>, RuntimeError> {
+    let Some(record) = try_take_record_from_buffer(buffer)? else {
+        return Ok(None);
+    };
+    RpcMessage::decode(&record)
+        .map(Some)
+        .map_err(RuntimeError::Wire)
+}
+
+pub async fn write_rpc_message<W>(writer: &mut W, message: &RpcMessage) -> Result<(), RuntimeError>
+where
+    W: AsyncWrite + Unpin,
+{
+    let payload = message.encode().map_err(RuntimeError::Wire)?;
+    write_record_payload(writer, &payload).await
+}
+
+fn try_take_record_from_buffer(buffer: &mut BytesMut) -> Result<Option<Bytes>, RuntimeError> {
+    let mut offset = 0usize;
+    let mut fragments = 0usize;
+    let mut total_payload_len = 0usize;
+
+    loop {
+        let remaining = &buffer[offset..];
+        if remaining.is_empty() {
+            return Ok(None);
+        }
+        if remaining.len() < 4 {
+            return Ok(None);
+        }
+
+        let marker =
+            RecordMarker::decode_bytes(remaining[..4].try_into().expect("slice len checked"));
+        let fragment_len = marker.payload_len as usize;
+        let consumed = 4 + fragment_len;
+
+        if remaining.len() < consumed {
+            return Ok(None);
+        }
+
+        fragments += 1;
+        total_payload_len += fragment_len;
+        offset += consumed;
+
+        if marker.last_fragment {
+            break;
+        }
+    }
+
+    if fragments == 1 {
+        let mut framed = buffer.split_to(offset);
+        framed.advance(4);
+        return Ok(Some(framed.freeze()));
+    }
+
+    let mut consumed = buffer.split_to(offset);
+    let mut assembled = BytesMut::with_capacity(total_payload_len);
+    while !consumed.is_empty() {
+        let marker =
+            RecordMarker::decode_bytes(consumed[..4].try_into().expect("slice len checked"));
+        consumed.advance(4);
+        let fragment_len = marker.payload_len as usize;
+        assembled.extend_from_slice(&consumed[..fragment_len]);
+        consumed.advance(fragment_len);
+        if marker.last_fragment {
+            break;
+        }
+    }
+
+    Ok(Some(assembled.freeze()))
+}
+
+async fn write_record_payload<W>(writer: &mut W, payload: &Bytes) -> Result<(), RuntimeError>
+where
+    W: AsyncWrite + Unpin,
+{
+    if payload.len() as u64 <= MAX_FRAGMENT_LEN as u64 {
+        let marker = RecordMarker::new(payload.len() as u32, true).map_err(RuntimeError::Wire)?;
+        writer
+            .write_all(&marker.encode_bytes())
+            .await
+            .map_err(|err| RuntimeError::Transport(err.to_string()))?;
+        writer
+            .write_all(payload)
+            .await
+            .map_err(|err| RuntimeError::Transport(err.to_string()))?;
+        writer
+            .flush()
+            .await
+            .map_err(|err| RuntimeError::Transport(err.to_string()))?;
+        return Ok(());
+    }
+
+    for fragment in fragment_record(payload, MAX_FRAGMENT_LEN).map_err(RuntimeError::Wire)? {
+        writer
+            .write_all(&fragment)
+            .await
+            .map_err(|err| RuntimeError::Transport(err.to_string()))?;
+    }
+    writer
+        .flush()
+        .await
+        .map_err(|err| RuntimeError::Transport(err.to_string()))?;
+    Ok(())
 }
 
 #[cfg(test)]
