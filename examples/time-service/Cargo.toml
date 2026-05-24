@@ -1,0 +1,16 @@
+[package]
+name = "time-service-example"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+tokio.workspace = true
+onc-rpc-runtime = { path = "../../crates/onc-rpc-runtime" }
+onc-rpc-server = { path = "../../crates/onc-rpc-server" }
+onc-rpc-xdr = { path = "../../crates/onc-rpc-xdr" }

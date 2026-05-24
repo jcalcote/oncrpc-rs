@@ -63,6 +63,74 @@ contract.
 See [docs/architecture.md](docs/architecture.md) for the current crate-boundary and code-generation direction.
 See [docs/codegen.md](docs/codegen.md) for fixture layout, output policy, and generator testing expectations.
 
+## Minimal Example
+
+A tiny end-to-end time service example now lives under
+[`examples/time-service/`](examples/time-service).
+
+The IDL is intentionally small:
+
+```xdr
+typedef string time_string<64>;
+
+program TIME_SERVICE {
+    version TIME_SERVICE_V1 {
+        time_string GET_TIME(void) = 1;
+    } = 1;
+} = 0x31230001;
+```
+
+Run the example server and client from the workspace root:
+
+```bash
+cargo run -p time-service-example --bin time-server
+cargo run -p time-service-example --bin time-client -- 127.0.0.1:4000
+```
+
+The full source is in:
+
+- `examples/time-service/src/bin/time-server.rs`
+- `examples/time-service/src/bin/time-client.rs`
+- `examples/time-service/time_service.x`
+
+The server and client live in separate source files. The core Rust shape is
+short enough to read directly:
+
+```rust
+use onc_rpc_server::{Program, ServerBuilder, TokioAsyncServerTransport};
+use time_service_example::time_service;
+use time_service_example::time_service_stubs::time_service::time_service_v1::async_server::{
+    TIME_SERVICE_V1Dispatch, TIME_SERVICE_V1Service,
+};
+
+struct TimeService;
+
+#[onc_rpc_server::async_trait]
+impl TIME_SERVICE_V1Service for TimeService {
+    async fn get_time(&self) -> Result<time_service::time_string, onc_rpc_server::DispatchError> {
+        Ok("unix-seconds: ...".to_string())
+    }
+}
+
+let mut server = ServerBuilder::new().with_bind_addr("127.0.0.1:4000".parse()?).build_async();
+server.register(
+    Program { number: time_service::time_service::PROGRAM, version: time_service::time_service::time_service_v1::VERSION },
+    TIME_SERVICE_V1Dispatch::new(TimeService),
+)?;
+TokioAsyncServerTransport::bind(server).await?.serve().await?;
+```
+
+```rust
+use onc_rpc_runtime::{AsyncClient, ClientConfig, TokioAsyncClientTransport};
+use time_service_example::time_service_stubs::time_service::time_service_v1::async_client::TIME_SERVICE_V1Client;
+
+let config = ClientConfig::new("127.0.0.1:4000".parse()?)
+    .with_connect_timeout(std::time::Duration::from_secs(5));
+let transport = TokioAsyncClientTransport::connect(&config).await?;
+let stub = TIME_SERVICE_V1Client::new(AsyncClient::new(config, transport));
+println!("{}", stub.get_time().await?);
+```
+
 ## Third-Party Dependencies
 
 Current Rust dependencies are intentionally small:
