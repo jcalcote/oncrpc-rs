@@ -98,6 +98,16 @@ pub trait AsyncDispatch: Send + Sync + 'static {
     async fn dispatch(&self, request: RequestContext) -> Result<ResponsePayload, DispatchError>;
 }
 
+pub trait ServerTransportIntrospection {
+    fn config(&self) -> &ServerConfig;
+    fn registered_programs(&self) -> Vec<Program>;
+}
+
+pub trait AsyncServerTransportIntrospection {
+    fn config(&self) -> &ServerConfig;
+    fn registered_programs(&self) -> Vec<Program>;
+}
+
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ServerError {
     #[error("service already registered for program {0:?}")]
@@ -172,6 +182,12 @@ impl Server {
         &self.config
     }
 
+    pub fn registered_programs(&self) -> Vec<Program> {
+        let mut programs = self.dispatchers.keys().copied().collect::<Vec<_>>();
+        programs.sort_by_key(|program| (program.number, program.version));
+        programs
+    }
+
     pub fn register<D: Dispatch>(
         &mut self,
         program: Program,
@@ -234,6 +250,12 @@ impl Server {
 impl AsyncServer {
     pub fn config(&self) -> &ServerConfig {
         &self.config
+    }
+
+    pub fn registered_programs(&self) -> Vec<Program> {
+        let mut programs = self.dispatchers.keys().copied().collect::<Vec<_>>();
+        programs.sort_by_key(|program| (program.number, program.version));
+        programs
     }
 
     pub fn register<D: AsyncDispatch>(

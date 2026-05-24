@@ -59,6 +59,14 @@ impl TokioServerTransport {
             .map_err(|err| ServerTransportError::Io(err.to_string()))
     }
 
+    pub fn config(&self) -> &crate::ServerConfig {
+        self.server.config()
+    }
+
+    pub fn registered_programs(&self) -> Vec<crate::Program> {
+        self.server.registered_programs()
+    }
+
     pub async fn accept_once(&self) -> Result<(), ServerTransportError> {
         let (stream, _) = self
             .listener
@@ -93,6 +101,16 @@ impl TokioServerTransport {
     }
 }
 
+impl crate::ServerTransportIntrospection for TokioServerTransport {
+    fn config(&self) -> &crate::ServerConfig {
+        self.server.config()
+    }
+
+    fn registered_programs(&self) -> Vec<crate::Program> {
+        self.server.registered_programs()
+    }
+}
+
 impl TokioAsyncServerTransport {
     pub async fn bind(server: AsyncServer) -> Result<Self, ServerTransportError> {
         let config = server.config().clone();
@@ -115,6 +133,14 @@ impl TokioAsyncServerTransport {
         self.listener
             .local_addr()
             .map_err(|err| ServerTransportError::Io(err.to_string()))
+    }
+
+    pub fn config(&self) -> &crate::ServerConfig {
+        self.server.config()
+    }
+
+    pub fn registered_programs(&self) -> Vec<crate::Program> {
+        self.server.registered_programs()
     }
 
     pub async fn accept_once(&self) -> Result<(), ServerTransportError> {
@@ -148,6 +174,16 @@ impl TokioAsyncServerTransport {
                 let _ = serve_async_connection(stream, server, worker_limit).await;
             });
         }
+    }
+}
+
+impl crate::AsyncServerTransportIntrospection for TokioAsyncServerTransport {
+    fn config(&self) -> &crate::ServerConfig {
+        self.server.config()
+    }
+
+    fn registered_programs(&self) -> Vec<crate::Program> {
+        self.server.registered_programs()
     }
 }
 

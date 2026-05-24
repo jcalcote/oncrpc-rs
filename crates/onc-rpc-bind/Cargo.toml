@@ -12,6 +12,11 @@ categories.workspace = true
 description = "Optional rpcbind / portmap support for ONC RPC."
 
 [dependencies]
+async-trait.workspace = true
+bytes.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
 onc-rpc-runtime = { path = "../onc-rpc-runtime" }
-
+onc-rpc-server = { path = "../onc-rpc-server" }
+onc-rpc-wire = { path = "../onc-rpc-wire" }
+onc-rpc-xdr = { path = "../onc-rpc-xdr" }

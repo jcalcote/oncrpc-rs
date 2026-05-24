@@ -55,6 +55,8 @@ The workspace now includes:
 - per-file `.x` module generation with include-aware loading
 - typed synchronous and asynchronous client/server stub generation
 - request-level call options with per-call timeout override support
+- optional synchronous and asynchronous `rpcbind` lookup/register/unregister
+  support
 - a working `oncrpcgen` CLI that can generate usable output from real `.x` inputs
 
 The main remaining implementation work is in transport depth, interoperability,
@@ -170,6 +172,5 @@ cargo check --workspace
   load
 - add per-call auth options to the generated/runtime API surface
 - improve `oncrpcgen` CLI help and consumer integration ergonomics
-- add `rpcbind` / portmap support
 - add RPC-over-TLS support
 - broaden examples and generated-code polish for downstream consumers
