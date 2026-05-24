@@ -5,7 +5,7 @@ use crate::{
 use async_trait::async_trait;
 use bytes::BytesMut;
 use std::collections::HashMap;
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Mutex as StdMutex, mpsc};
 use tokio::io::AsyncReadExt;
 use tokio::net::{TcpSocket, TcpStream, tcp::OwnedReadHalf, tcp::OwnedWriteHalf};
 use tokio::sync::{Mutex, oneshot};
@@ -17,10 +17,13 @@ type PendingMap = Arc<Mutex<HashMap<Xid, oneshot::Sender<Result<RpcMessage, Runt
 pub struct TokioAsyncClientTransport {
     writer: Arc<Mutex<OwnedWriteHalf>>,
     pending: PendingMap,
+    read_timeout: Option<std::time::Duration>,
+    write_timeout: Option<std::time::Duration>,
 }
 
 pub struct TokioClientTransport {
-    runtime: Arc<tokio::runtime::Runtime>,
+    runtime_handle: tokio::runtime::Handle,
+    runtime_guard: Arc<OwnedRuntime>,
     inner: TokioAsyncClientTransport,
 }
 
@@ -43,10 +46,13 @@ impl TokioAsyncClientTransport {
             })?
             .map_err(|err| RuntimeError::Transport(err.to_string()))?;
 
-        Self::from_stream(stream)
+        Self::from_stream_with_timeouts(stream, config.read_timeout, config.write_timeout)
     }
-
-    pub(crate) fn from_stream(stream: TcpStream) -> Result<Self, RuntimeError> {
+    fn from_stream_with_timeouts(
+        stream: TcpStream,
+        read_timeout: Option<std::time::Duration>,
+        write_timeout: Option<std::time::Duration>,
+    ) -> Result<Self, RuntimeError> {
         let (reader, writer) = stream.into_split();
         let pending = Arc::new(Mutex::new(HashMap::new()));
 
@@ -55,21 +61,51 @@ impl TokioAsyncClientTransport {
         Ok(Self {
             writer: Arc::new(Mutex::new(writer)),
             pending,
+            read_timeout,
+            write_timeout,
         })
     }
 }
 
 impl TokioClientTransport {
     pub fn connect(config: &ClientConfig) -> Result<Self, RuntimeError> {
-        let runtime = Arc::new(
-            tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()
-                .map_err(|err| RuntimeError::Transport(err.to_string()))?,
-        );
-        let inner = runtime.block_on(TokioAsyncClientTransport::connect(config))?;
+        let runtime = build_owned_runtime()?;
+        let runtime_handle = runtime.handle().clone();
+        let runtime_guard = Arc::new(OwnedRuntime::new(runtime));
+        let inner = runtime_handle.block_on(TokioAsyncClientTransport::connect(config))?;
 
-        Ok(Self { runtime, inner })
+        Ok(Self {
+            runtime_handle,
+            runtime_guard,
+            inner,
+        })
+    }
+}
+
+fn build_owned_runtime() -> Result<tokio::runtime::Runtime, RuntimeError> {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|err| RuntimeError::Transport(err.to_string()))
+}
+
+struct OwnedRuntime {
+    runtime: StdMutex<Option<tokio::runtime::Runtime>>,
+}
+
+impl OwnedRuntime {
+    fn new(runtime: tokio::runtime::Runtime) -> Self {
+        Self {
+            runtime: StdMutex::new(Some(runtime)),
+        }
+    }
+}
+
+impl Drop for OwnedRuntime {
+    fn drop(&mut self) {
+        if let Some(runtime) = self.runtime.lock().expect("runtime mutex poisoned").take() {
+            let _ = std::thread::spawn(move || drop(runtime)).join();
+        }
     }
 }
 
@@ -80,18 +116,39 @@ impl AsyncClientTransport for TokioAsyncClientTransport {
         let (tx, rx) = oneshot::channel();
         self.pending.lock().await.insert(xid, tx);
 
-        let write_result = async {
+        let write_future = async {
             let mut writer = self.writer.lock().await;
             write_rpc_message(&mut *writer, &request).await
-        }
-        .await;
+        };
+        let write_result = match self.write_timeout {
+            Some(timeout_duration) => {
+                timeout(timeout_duration, write_future).await.map_err(|_| {
+                    RuntimeError::Transport(format!("write timeout after {:?}", timeout_duration))
+                })?
+            }
+            None => write_future.await,
+        };
 
         if let Err(error) = write_result {
             self.pending.lock().await.remove(&xid);
             return Err(error);
         }
 
-        match rx.await {
+        let reply_result = match self.read_timeout {
+            Some(timeout_duration) => match timeout(timeout_duration, rx).await {
+                Ok(result) => result,
+                Err(_) => {
+                    self.pending.lock().await.remove(&xid);
+                    return Err(RuntimeError::Transport(format!(
+                        "read timeout after {:?}",
+                        timeout_duration
+                    )));
+                }
+            },
+            None => rx.await,
+        };
+
+        match reply_result {
             Ok(result) => result,
             Err(_) => Err(RuntimeError::ConnectionClosed),
         }
@@ -102,8 +159,9 @@ impl ClientTransport for TokioClientTransport {
     fn call(&self, request: RpcMessage) -> Result<RpcMessage, RuntimeError> {
         let (tx, rx) = mpsc::sync_channel(1);
         let inner = self.inner.clone();
+        let _runtime_guard = self.runtime_guard.clone();
 
-        self.runtime.handle().spawn(async move {
+        self.runtime_handle.spawn(async move {
             let _ = tx.send(inner.call(request).await);
         });
 

@@ -156,6 +156,49 @@ async fn async_transport_correlates_concurrent_requests_by_xid() {
     server.await.expect("server task should complete");
 }
 
+#[tokio::test]
+async fn async_transport_honors_read_timeout() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let addr = listener.local_addr().expect("local addr");
+
+    let _server = tokio::spawn(async move {
+        let (_stream, _) = listener.accept().await.expect("accept should succeed");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    });
+
+    let config = ClientConfig::new(addr)
+        .with_connect_timeout(Duration::from_secs(5))
+        .with_read_timeout(Duration::from_millis(50));
+    let transport = TokioAsyncClientTransport::connect(&config)
+        .await
+        .expect("client should connect");
+    let client = AsyncClient::new(config, transport);
+
+    let error = client
+        .call(CallRequest::new(
+            ProgramVersion {
+                program: 100_003,
+                version: 3,
+            },
+            Procedure(1),
+            Bytes::from_static(b"hello"),
+        ))
+        .await
+        .expect_err("call should time out");
+
+    match error {
+        onc_rpc_runtime::RuntimeError::Transport(message) => {
+            assert!(
+                message.contains("read timeout"),
+                "unexpected message: {message}"
+            );
+        }
+        other => panic!("expected read-timeout transport error, got {other:?}"),
+    }
+}
+
 #[test]
 fn sync_transport_performs_round_trip_over_tokio_io() {
     let runtime = tokio::runtime::Runtime::new().expect("runtime should build");

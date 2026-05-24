@@ -76,6 +76,7 @@ Owns client-side transport/runtime behavior:
 - TCP connection setup
 - local bind support
 - connect timeouts
+- read and write timeout policy
 - request/reply correlation
 - TCP record framing and reassembly
 - synchronous and asynchronous client call handling
@@ -105,6 +106,8 @@ requirements. In practice that means:
   underlying transport supports it
 - synchronous convenience layers must not silently collapse concurrent callers
   onto one serialized execution path
+- connection, read, and write timeout behavior should be configurable through
+  explicit client configuration rather than hidden transport defaults
 
 ### `onc-rpc-server`
 
@@ -117,6 +120,7 @@ Owns server-side runtime behavior:
 - integration with the runtime and wire layers
 - synchronous and asynchronous dispatch contracts
 - concurrent request handling and reply emission over shared connections
+- transport runtime sizing and worker concurrency controls
 
 Server registration should center on explicit `{program, version}` ownership and
 generated dispatch glue from `onc-rpcgen`.
@@ -130,6 +134,8 @@ practice that means:
   concurrently rather than funneling all work through a single execution lane
 - generated dispatch glue must remain compatible with highly concurrent caller
   behavior in real Hammerspace components
+- server-side concurrency and runtime sizing knobs should be surfaced through
+  explicit builder/configuration APIs rather than hard-coded transport choices
 
 ### `onc-rpc-tls`
 

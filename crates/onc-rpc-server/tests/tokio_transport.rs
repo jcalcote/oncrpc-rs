@@ -154,6 +154,67 @@ async fn async_server_transport_handles_concurrent_requests_on_one_connection() 
         .expect("server transport should complete");
 }
 
+#[tokio::test]
+async fn async_server_transport_honors_worker_thread_limit() {
+    let mut server = ServerBuilder::new()
+        .with_bind_addr(loopback_addr())
+        .with_selector_threads(2)
+        .with_worker_threads(1)
+        .build_async();
+    server
+        .register(
+            Program {
+                number: 100_003,
+                version: 3,
+            },
+            AsyncReorderingDispatch,
+        )
+        .expect("registration should succeed");
+
+    let transport = TokioAsyncServerTransport::bind(server)
+        .await
+        .expect("server should bind");
+    let addr = transport.local_addr().expect("local addr");
+    let serve = tokio::spawn(async move { transport.accept_once().await });
+
+    let config = ClientConfig::new(addr).with_connect_timeout(Duration::from_secs(5));
+    let client_transport = TokioAsyncClientTransport::connect(&config)
+        .await
+        .expect("client should connect");
+    let client = AsyncClient::new(config, client_transport);
+
+    let started = tokio::time::Instant::now();
+    let first = client.call_typed::<u32, u32>(
+        ProgramVersion {
+            program: 100_003,
+            version: 3,
+        },
+        Procedure(1),
+        &1_u32,
+    );
+    let second = client.call_typed::<u32, u32>(
+        ProgramVersion {
+            program: 100_003,
+            version: 3,
+        },
+        Procedure(1),
+        &2_u32,
+    );
+
+    let (_, second_result) = tokio::join!(first, second);
+    assert_eq!(second_result.expect("second call should succeed"), 2);
+    assert!(
+        started.elapsed() >= Duration::from_millis(45),
+        "worker limit did not serialize request handling"
+    );
+
+    drop(client);
+    serve
+        .await
+        .expect("server task should join")
+        .expect("server transport should complete");
+}
+
 #[test]
 fn sync_server_transport_dispatches_over_real_tokio_io() {
     let runtime = tokio::runtime::Runtime::new().expect("runtime should build");
