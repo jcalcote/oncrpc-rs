@@ -60,7 +60,9 @@ fn generate_command_writes_types_and_stubs_files() {
     assert!(types.contains("crate::common_types::job_id_t"));
     assert!(types.contains("crate::transfer_types::job_update_t"));
     assert!(stubs.contains("pub mod client {"));
+    assert!(stubs.contains("pub mod async_client {"));
     assert!(stubs.contains("pub mod server {"));
+    assert!(stubs.contains("pub mod async_server {"));
     assert!(stubs.contains("pub struct BLOB_SERVICE_V1Client<T> {"));
     assert!(!stubs.contains("nfs_support_program"));
     assert!(transfer_types.contains("crate::nfs_support::remote_handle_t"));
@@ -128,7 +130,9 @@ fn emit_stubs_command_can_omit_client_or_server_sections() {
     let stubs = fs::read_to_string(temp.path().join("blob_service_basic.stubs.rs"))
         .expect("stubs output should exist");
     assert!(stubs.contains("pub mod server {"));
+    assert!(stubs.contains("pub mod async_server {"));
     assert!(!stubs.contains("pub struct BLOB_SERVICE_V1Client<T>"));
+    assert!(!stubs.contains("pub mod async_client {"));
     assert!(stubs.contains("pub trait BLOB_SERVICE_V1Service {"));
 
     let temp = TempDir::new().expect("tempdir should exist");
@@ -143,8 +147,10 @@ fn emit_stubs_command_can_omit_client_or_server_sections() {
     let stubs = fs::read_to_string(temp.path().join("blob_service_basic.stubs.rs"))
         .expect("stubs output should exist");
     assert!(stubs.contains("pub mod client {"));
+    assert!(stubs.contains("pub mod async_client {"));
     assert!(stubs.contains("pub struct BLOB_SERVICE_V1Client<T>"));
     assert!(!stubs.contains("pub trait BLOB_SERVICE_V1Service {"));
+    assert!(!stubs.contains("pub mod async_server {"));
 }
 
 #[test]

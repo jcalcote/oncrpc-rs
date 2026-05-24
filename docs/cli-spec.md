@@ -5,16 +5,16 @@
 This document specifies the intended command-line interface and library-facing
 generation contract for `onc-rpcgen`.
 
-It exists to document the completed synchronous generation contract for:
+It exists to document the completed synchronous and asynchronous generation
+contract for:
 
 - CLI option parsing
 - build-system integration
-- generated synchronous client APIs
-- generated synchronous server trait and dispatch APIs
+- generated synchronous and asynchronous client APIs
+- generated synchronous and asynchronous server trait and dispatch APIs
 
 The intent is to keep the Rust design aligned with the feature intent of
-`oncrpc4j-rpcgen` for synchronous generation while avoiding Java-specific CLI
-and object-model baggage.
+`oncrpc4j-rpcgen` while avoiding Java-specific CLI and object-model baggage.
 
 ## Scope
 
@@ -24,16 +24,18 @@ This specification covers the current `onc-rpcgen` implementation:
 - generator library entry points
 - generation options
 - output structure
-- generated synchronous client shapes
-- generated synchronous server trait and dispatch shapes
+- generated synchronous and asynchronous client shapes
+- generated synchronous and asynchronous server trait and dispatch shapes
 
 This specification does not yet define:
 
 - exact `build.rs` integration API
-- asynchronous stub generation
 - timeout/per-call auth generated API variants
 - rpcbind integration
 - TLS-specific generation behavior
+
+It also records the additive async contract now implemented by
+`onc-rpc-runtime`, `onc-rpc-server`, and `onc-rpcgen`.
 
 ## Design Principles
 
@@ -43,6 +45,8 @@ This specification does not yet define:
 - Prefer typed options structs over long generated parameter lists.
 - Prefer Rust-native synchronous API shapes over direct Java callback-style
   emulation.
+- Preserve synchronous APIs when adding async support; async should be
+  additive.
 - Fail closed on unsupported or ambiguous generation inputs.
 
 ## Command Structure
@@ -125,8 +129,8 @@ By default this means:
 
 - types
 - program/version/procedure constants
-- client stubs
-- server traits and dispatch glue
+- synchronous and asynchronous client stubs
+- synchronous and asynchronous server traits and dispatch glue
 
 If the input schema pulls in additional `.x` files through includes, generation
 should emit the reachable sibling Rust type modules needed to represent those
@@ -206,13 +210,15 @@ Relevant only for `generate`.
 
 #### `--no-client`
 
-Suppress synchronous client stub generation.
+Suppress client stub generation, including both synchronous and asynchronous
+client modules.
 
 Relevant for `emit stubs` and `generate`.
 
 #### `--no-server`
 
-Suppress synchronous server trait/dispatch generation.
+Suppress server trait/dispatch generation, including both synchronous and
+asynchronous server modules.
 
 Relevant for `emit stubs` and `generate`.
 
@@ -285,7 +291,8 @@ The exact names may still evolve, but the shape should remain:
 
 - parse API
 - focused emit APIs
-- one higher-level generation API with explicit synchronous-generation options
+- one higher-level generation API with explicit client/server generation
+  options
 
 ## Output Layout
 
@@ -313,7 +320,10 @@ The current preferred direction is:
 
 ## Generated Client API
 
-The current client generation contract is typed and synchronous.
+The current client generation contract is typed and additive:
+
+- typed synchronous client modules
+- typed asynchronous client modules
 
 Examples:
 
@@ -326,12 +336,49 @@ pub fn proc(&self, arg: Arg) -> Result<(), RuntimeError>;
 Generated client methods must marshal arguments and replies through
 `onc_rpc_xdr::XdrEncode` and `onc_rpc_xdr::XdrDecode`.
 
+The intended direction is:
+
+- keep the synchronous client modules and types
+- add explicit async client modules alongside them
+- target an executor-agnostic async runtime contract at the public API boundary
+- avoid collapsing sync and async methods onto the same generated client type
+
+Illustrative shape:
+
+```rust
+pub mod client {
+    pub struct BlobServiceV1Client<T> { /* ... */ }
+
+    impl<T> BlobServiceV1Client<T> {
+        pub fn blob_copy(
+            &self,
+            arg: copy_request_t,
+        ) -> Result<job_result_t, RuntimeError> {
+            /* ... */
+        }
+    }
+}
+
+pub mod async_client {
+    pub struct BlobServiceV1Client<T> { /* ... */ }
+
+    impl<T> BlobServiceV1Client<T> {
+        pub async fn blob_copy(
+            &self,
+            arg: copy_request_t,
+        ) -> Result<job_result_t, RuntimeError> {
+            /* ... */
+        }
+    }
+}
+```
+
 ## Generated Server API
 
 Server generation currently produces:
 
-- typed synchronous service traits
-- dispatch adapters targeting `onc-rpc-server::Dispatch`
+- typed synchronous service traits and dispatch adapters
+- typed asynchronous service traits and dispatch adapters
 
 Example:
 
@@ -349,6 +396,37 @@ Generated dispatch glue must:
 - encode typed results into reply payload bytes
 - map malformed payloads to `DispatchError::GarbageArgs`
 - map reply encoding failures to `DispatchError::SystemError`
+
+The intended direction is:
+
+- keep the existing generated synchronous server modules and traits
+- add explicit async server modules alongside them
+- generate async server traits using `async fn`
+- use `async-trait` as the current implementation bridge for generated async
+  server traits
+- target a parallel async dispatch contract in `onc-rpc-server` rather than
+  replacing the synchronous dispatch contract
+
+Illustrative shape:
+
+```rust
+pub mod async_server {
+    #[async_trait::async_trait]
+    pub trait BlobServiceV1Service {
+        async fn blob_copy(
+            &self,
+            arg: copy_request_t,
+        ) -> Result<job_result_t, DispatchError>;
+    }
+
+    pub struct BlobServiceV1Dispatch<T> { /* ... */ }
+}
+```
+
+This design favors readability and straightforward consumer ergonomics over a
+future-returning trait surface. If the project later finds a better way to
+express the same contract without `async-trait`, that should be treated as an
+intentional API evolution rather than an implicit drift.
 
 ## Error Policy
 
@@ -374,15 +452,15 @@ It intentionally does not preserve Java-specific choices such as:
 - callback-first async design
 - class-name override driven architecture
 
-## Implementation Order
+## Implementation Status
 
-The recommended implementation order is:
+The currently implemented contract covers:
 
-1. add this contract to the repo as documentation
-2. introduce runtime `CallOptions`
-3. generate typed sync client methods
-4. generate typed sync server traits and dispatch glue
-5. generate async variants
-6. implement the CLI as a thin wrapper over the library API
+1. deterministic `.x` parsing
+2. per-file Rust type generation
+3. generated XDR serializers
+4. typed synchronous client and server stubs
+5. additive typed asynchronous client and server stubs
+6. a thin CLI over the library generation API
 
-This order keeps the generated API contract ahead of the command-line wrapper.
+Future work should build on this contract rather than redefining it.

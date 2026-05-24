@@ -1,5 +1,6 @@
 //! Minimal client-side ONC RPC contracts for generated stubs.
 
+pub use async_trait::async_trait;
 use bytes::Bytes;
 pub use onc_rpc_wire::{
     AcceptedReply, AcceptedStatus, AuthStat, MessageBody, OpaqueAuth, Procedure, ProgramVersion,
@@ -66,6 +67,11 @@ pub trait ClientTransport: Send + Sync + 'static {
     fn call(&self, request: RpcMessage) -> Result<RpcMessage, RuntimeError>;
 }
 
+#[async_trait]
+pub trait AsyncClientTransport: Send + Sync + 'static {
+    async fn call(&self, request: RpcMessage) -> Result<RpcMessage, RuntimeError>;
+}
+
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum RuntimeError {
     #[error("transport failure: {0}")]
@@ -100,6 +106,12 @@ pub struct Client<T> {
     next_xid: AtomicU32,
 }
 
+pub struct AsyncClient<T> {
+    config: ClientConfig,
+    transport: T,
+    next_xid: AtomicU32,
+}
+
 impl<T> Client<T>
 where
     T: ClientTransport,
@@ -118,41 +130,9 @@ where
 
     pub fn call(&self, request: CallRequest) -> Result<CallResponse, RuntimeError> {
         let xid = Xid(self.next_xid.fetch_add(1, Ordering::Relaxed));
-        let wire_request = self.build_request_message(xid, request);
+        let wire_request = build_request_message(&self.config, xid, request);
         let reply = self.transport.call(wire_request)?;
-
-        if reply.xid != xid {
-            return Err(RuntimeError::XidMismatch {
-                expected: xid,
-                actual: reply.xid,
-            });
-        }
-
-        match reply.body {
-            MessageBody::Call(_) => Err(RuntimeError::UnexpectedCallMessage),
-            MessageBody::Reply(ReplyBody::Accepted(AcceptedReply { verifier, status })) => {
-                match status {
-                    AcceptedStatus::Success(payload) => Ok(CallResponse {
-                        xid,
-                        verifier,
-                        payload,
-                    }),
-                    AcceptedStatus::ProgramUnavailable => Err(RuntimeError::ProgramUnavailable),
-                    AcceptedStatus::ProgramMismatch(range) => {
-                        Err(RuntimeError::ProgramMismatch(range))
-                    }
-                    AcceptedStatus::ProcedureUnavailable => Err(RuntimeError::ProcedureUnavailable),
-                    AcceptedStatus::GarbageArgs => Err(RuntimeError::GarbageArgs),
-                    AcceptedStatus::SystemError => Err(RuntimeError::SystemError),
-                }
-            }
-            MessageBody::Reply(ReplyBody::Denied(RejectedReply::RpcMismatch(range))) => {
-                Err(RuntimeError::RpcMismatch(range))
-            }
-            MessageBody::Reply(ReplyBody::Denied(RejectedReply::AuthError(status))) => {
-                Err(RuntimeError::AuthError(status))
-            }
-        }
+        handle_reply(xid, reply)
     }
 
     pub fn call_typed<Arg, Ret>(
@@ -169,29 +149,102 @@ where
         let response = self.call(CallRequest::new(program, procedure, payload))?;
         Ret::from_xdr_bytes(&response.payload).map_err(RuntimeError::Decode)
     }
+}
 
-    fn build_request_message(&self, xid: Xid, request: CallRequest) -> RpcMessage {
-        let credentials = if request.credentials == OpaqueAuth::none() {
-            self.config.credentials.clone()
-        } else {
-            request.credentials
-        };
+impl<T> AsyncClient<T>
+where
+    T: AsyncClientTransport,
+{
+    pub fn new(config: ClientConfig, transport: T) -> Self {
+        Self {
+            config,
+            transport,
+            next_xid: AtomicU32::new(1),
+        }
+    }
 
-        let verifier = if request.verifier == OpaqueAuth::none() {
-            self.config.verifier.clone()
-        } else {
-            request.verifier
-        };
+    pub fn config(&self) -> &ClientConfig {
+        &self.config
+    }
 
-        RpcMessage {
-            xid,
-            body: MessageBody::Call(onc_rpc_wire::CallBody::new(
-                request.program,
-                request.procedure,
-                credentials,
+    pub async fn call(&self, request: CallRequest) -> Result<CallResponse, RuntimeError> {
+        let xid = Xid(self.next_xid.fetch_add(1, Ordering::Relaxed));
+        let wire_request = build_request_message(&self.config, xid, request);
+        let reply = self.transport.call(wire_request).await?;
+        handle_reply(xid, reply)
+    }
+
+    pub async fn call_typed<Arg, Ret>(
+        &self,
+        program: ProgramVersion,
+        procedure: Procedure,
+        argument: &Arg,
+    ) -> Result<Ret, RuntimeError>
+    where
+        Arg: XdrEncode,
+        Ret: XdrDecode,
+    {
+        let payload = argument.to_xdr_bytes().map_err(RuntimeError::Encode)?;
+        let response = self
+            .call(CallRequest::new(program, procedure, payload))
+            .await?;
+        Ret::from_xdr_bytes(&response.payload).map_err(RuntimeError::Decode)
+    }
+}
+
+fn build_request_message(config: &ClientConfig, xid: Xid, request: CallRequest) -> RpcMessage {
+    let credentials = if request.credentials == OpaqueAuth::none() {
+        config.credentials.clone()
+    } else {
+        request.credentials
+    };
+
+    let verifier = if request.verifier == OpaqueAuth::none() {
+        config.verifier.clone()
+    } else {
+        request.verifier
+    };
+
+    RpcMessage {
+        xid,
+        body: MessageBody::Call(onc_rpc_wire::CallBody::new(
+            request.program,
+            request.procedure,
+            credentials,
+            verifier,
+            request.payload,
+        )),
+    }
+}
+
+fn handle_reply(xid: Xid, reply: RpcMessage) -> Result<CallResponse, RuntimeError> {
+    if reply.xid != xid {
+        return Err(RuntimeError::XidMismatch {
+            expected: xid,
+            actual: reply.xid,
+        });
+    }
+
+    match reply.body {
+        MessageBody::Call(_) => Err(RuntimeError::UnexpectedCallMessage),
+        MessageBody::Reply(ReplyBody::Accepted(AcceptedReply { verifier, status })) => match status
+        {
+            AcceptedStatus::Success(payload) => Ok(CallResponse {
+                xid,
                 verifier,
-                request.payload,
-            )),
+                payload,
+            }),
+            AcceptedStatus::ProgramUnavailable => Err(RuntimeError::ProgramUnavailable),
+            AcceptedStatus::ProgramMismatch(range) => Err(RuntimeError::ProgramMismatch(range)),
+            AcceptedStatus::ProcedureUnavailable => Err(RuntimeError::ProcedureUnavailable),
+            AcceptedStatus::GarbageArgs => Err(RuntimeError::GarbageArgs),
+            AcceptedStatus::SystemError => Err(RuntimeError::SystemError),
+        },
+        MessageBody::Reply(ReplyBody::Denied(RejectedReply::RpcMismatch(range))) => {
+            Err(RuntimeError::RpcMismatch(range))
+        }
+        MessageBody::Reply(ReplyBody::Denied(RejectedReply::AuthError(status))) => {
+            Err(RuntimeError::AuthError(status))
         }
     }
 }
@@ -221,6 +274,13 @@ mod tests {
                 .expect("mutex poisoned")
                 .pop_front()
                 .expect("test reply should exist")
+        }
+    }
+
+    #[async_trait]
+    impl AsyncClientTransport for FakeTransport {
+        async fn call(&self, request: RpcMessage) -> Result<RpcMessage, RuntimeError> {
+            ClientTransport::call(self, request)
         }
     }
 
@@ -365,5 +425,51 @@ mod tests {
             error,
             RuntimeError::Decode(onc_rpc_xdr::XdrError::UnexpectedEof { .. })
         ));
+    }
+
+    #[tokio::test]
+    async fn async_client_call_returns_success_payload() {
+        let reply = RpcMessage {
+            xid: Xid(1),
+            body: MessageBody::Reply(ReplyBody::Accepted(AcceptedReply {
+                verifier: OpaqueAuth::none(),
+                status: AcceptedStatus::Success(Bytes::from_static(b"reply")),
+            })),
+        };
+        let client = AsyncClient::new(config(), FakeTransport::new(vec![Ok(reply)]));
+
+        let response = client.call(request()).await.expect("call should succeed");
+
+        assert_eq!(response.xid, Xid(1));
+        assert_eq!(response.payload, Bytes::from_static(b"reply"));
+    }
+
+    #[tokio::test]
+    async fn async_client_call_typed_encodes_request_and_decodes_reply() {
+        let reply_payload = EchoValue(321)
+            .to_xdr_bytes()
+            .expect("reply payload should encode");
+        let reply = RpcMessage {
+            xid: Xid(1),
+            body: MessageBody::Reply(ReplyBody::Accepted(AcceptedReply {
+                verifier: OpaqueAuth::none(),
+                status: AcceptedStatus::Success(reply_payload),
+            })),
+        };
+        let client = AsyncClient::new(config(), FakeTransport::new(vec![Ok(reply)]));
+
+        let response: EchoValue = client
+            .call_typed(
+                ProgramVersion {
+                    program: 100_003,
+                    version: 3,
+                },
+                Procedure(1),
+                &EchoValue(123),
+            )
+            .await
+            .expect("typed call should succeed");
+
+        assert_eq!(response, EchoValue(321));
     }
 }

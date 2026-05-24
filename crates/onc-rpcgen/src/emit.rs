@@ -198,6 +198,54 @@ impl StubEmitter {
             self.out.push('\n');
             line(indent + 4, &mut self.out, format_args!("}}"));
             self.out.push('\n');
+
+            line(
+                indent + 4,
+                &mut self.out,
+                format_args!("pub mod async_client {{"),
+            );
+            line(
+                indent + 8,
+                &mut self.out,
+                format_args!("pub struct {}<T> {{", client_name),
+            );
+            line(
+                indent + 12,
+                &mut self.out,
+                format_args!("client: onc_rpc_runtime::AsyncClient<T>,"),
+            );
+            line(indent + 8, &mut self.out, format_args!("}}"));
+            self.out.push('\n');
+
+            line(
+                indent + 8,
+                &mut self.out,
+                format_args!(
+                    "impl<T> {}<T> where T: onc_rpc_runtime::AsyncClientTransport {{",
+                    client_name
+                ),
+            );
+            line(
+                indent + 12,
+                &mut self.out,
+                format_args!("pub fn new(client: onc_rpc_runtime::AsyncClient<T>) -> Self {{"),
+            );
+            line(
+                indent + 16,
+                &mut self.out,
+                format_args!("Self {{ client }}"),
+            );
+            line(indent + 12, &mut self.out, format_args!("}}"));
+            self.out.push('\n');
+
+            for procedure in &version.procedures {
+                self.emit_async_client_method(procedure, indent + 12)?;
+            }
+
+            line(indent + 8, &mut self.out, format_args!("}}"));
+            self.out.push('\n');
+            line(indent + 4, &mut self.out, format_args!("}}"));
+            self.out.push('\n');
         }
 
         if self.emit_server {
@@ -259,6 +307,91 @@ impl StubEmitter {
             );
             for procedure in &version.procedures {
                 self.emit_dispatch_arm(procedure, indent + 20)?;
+            }
+            line(
+                indent + 20,
+                &mut self.out,
+                format_args!("_ => Err(onc_rpc_server::DispatchError::ProcedureUnavailable),"),
+            );
+            line(indent + 16, &mut self.out, format_args!("}}"));
+            line(indent + 12, &mut self.out, format_args!("}}"));
+            line(indent + 8, &mut self.out, format_args!("}}"));
+            self.out.push('\n');
+            line(indent + 4, &mut self.out, format_args!("}}"));
+            self.out.push('\n');
+
+            line(
+                indent + 4,
+                &mut self.out,
+                format_args!("pub mod async_server {{"),
+            );
+            line(
+                indent + 8,
+                &mut self.out,
+                format_args!("#[onc_rpc_server::async_trait]"),
+            );
+            line(
+                indent + 8,
+                &mut self.out,
+                format_args!("pub trait {} {{", service_name),
+            );
+            for procedure in &version.procedures {
+                self.emit_async_service_method(procedure, indent + 12)?;
+            }
+            line(indent + 8, &mut self.out, format_args!("}}"));
+            self.out.push('\n');
+
+            line(
+                indent + 8,
+                &mut self.out,
+                format_args!("pub struct {}<T> {{", dispatch_name),
+            );
+            line(indent + 12, &mut self.out, format_args!("inner: T,"));
+            line(indent + 8, &mut self.out, format_args!("}}"));
+            self.out.push('\n');
+
+            line(
+                indent + 8,
+                &mut self.out,
+                format_args!("impl<T> {}<T> {{", dispatch_name),
+            );
+            line(
+                indent + 12,
+                &mut self.out,
+                format_args!("pub fn new(inner: T) -> Self {{"),
+            );
+            line(indent + 16, &mut self.out, format_args!("Self {{ inner }}"));
+            line(indent + 12, &mut self.out, format_args!("}}"));
+            line(indent + 8, &mut self.out, format_args!("}}"));
+            self.out.push('\n');
+
+            line(
+                indent + 8,
+                &mut self.out,
+                format_args!("#[onc_rpc_server::async_trait]"),
+            );
+            line(
+                indent + 8,
+                &mut self.out,
+                format_args!(
+                    "impl<T> onc_rpc_server::AsyncDispatch for {}<T> where T: {} + Send + Sync + 'static {{",
+                    dispatch_name, service_name
+                ),
+            );
+            line(
+                indent + 12,
+                &mut self.out,
+                format_args!(
+                    "async fn dispatch(&self, request: onc_rpc_server::RequestContext) -> Result<onc_rpc_server::ResponsePayload, onc_rpc_server::DispatchError> {{"
+                ),
+            );
+            line(
+                indent + 16,
+                &mut self.out,
+                format_args!("match request.procedure.0 {{"),
+            );
+            for procedure in &version.procedures {
+                self.emit_async_dispatch_arm(procedure, indent + 20)?;
             }
             line(
                 indent + 20,
@@ -358,6 +491,85 @@ impl StubEmitter {
         Ok(())
     }
 
+    fn emit_async_client_method(
+        &mut self,
+        procedure: &ProcedureDecl,
+        indent: usize,
+    ) -> Result<(), GeneratorError> {
+        let method_name = to_snake_case(&procedure.name);
+        let request_type = self.procedure_rust_type(
+            &procedure.argument_type,
+            &format!("{}_arg", method_name),
+            indent,
+        )?;
+        let reply_type = self.procedure_rust_type(
+            &procedure.return_type,
+            &format!("{}_ret", method_name),
+            indent,
+        )?;
+
+        if request_type == "()" {
+            line(
+                indent,
+                &mut self.out,
+                format_args!(
+                    "pub async fn {}(&self) -> Result<{}, onc_rpc_runtime::RuntimeError> {{",
+                    method_name, reply_type
+                ),
+            );
+            line(
+                indent + 4,
+                &mut self.out,
+                format_args!("self.client.call_typed("),
+            );
+            line(
+                indent + 8,
+                &mut self.out,
+                format_args!(
+                    "onc_rpc_runtime::ProgramVersion {{ program: super::super::PROGRAM, version: super::VERSION }},"
+                ),
+            );
+            line(
+                indent + 8,
+                &mut self.out,
+                format_args!("onc_rpc_runtime::Procedure(super::{}),", procedure.name),
+            );
+            line(indent + 8, &mut self.out, format_args!("&(),"));
+            line(indent + 4, &mut self.out, format_args!(").await"));
+        } else {
+            line(
+                indent,
+                &mut self.out,
+                format_args!(
+                    "pub async fn {}(&self, argument: {}) -> Result<{}, onc_rpc_runtime::RuntimeError> {{",
+                    method_name, request_type, reply_type
+                ),
+            );
+            line(
+                indent + 4,
+                &mut self.out,
+                format_args!("self.client.call_typed("),
+            );
+            line(
+                indent + 8,
+                &mut self.out,
+                format_args!(
+                    "onc_rpc_runtime::ProgramVersion {{ program: super::super::PROGRAM, version: super::VERSION }},"
+                ),
+            );
+            line(
+                indent + 8,
+                &mut self.out,
+                format_args!("onc_rpc_runtime::Procedure(super::{}),", procedure.name),
+            );
+            line(indent + 8, &mut self.out, format_args!("&argument,"));
+            line(indent + 4, &mut self.out, format_args!(").await"));
+        }
+        line(indent, &mut self.out, format_args!("}}"));
+        self.out.push('\n');
+        Ok(())
+    }
+
     fn emit_service_method(
         &mut self,
         procedure: &ProcedureDecl,
@@ -390,6 +602,45 @@ impl StubEmitter {
                 &mut self.out,
                 format_args!(
                     "fn {}(&self, argument: {}) -> Result<{}, onc_rpc_server::DispatchError>;",
+                    method_name, request_type, reply_type
+                ),
+            );
+        }
+        Ok(())
+    }
+
+    fn emit_async_service_method(
+        &mut self,
+        procedure: &ProcedureDecl,
+        indent: usize,
+    ) -> Result<(), GeneratorError> {
+        let method_name = to_snake_case(&procedure.name);
+        let request_type = self.procedure_rust_type(
+            &procedure.argument_type,
+            &format!("{}_arg", method_name),
+            indent,
+        )?;
+        let reply_type = self.procedure_rust_type(
+            &procedure.return_type,
+            &format!("{}_ret", method_name),
+            indent,
+        )?;
+
+        if request_type == "()" {
+            line(
+                indent,
+                &mut self.out,
+                format_args!(
+                    "async fn {}(&self) -> Result<{}, onc_rpc_server::DispatchError>;",
+                    method_name, reply_type
+                ),
+            );
+        } else {
+            line(
+                indent,
+                &mut self.out,
+                format_args!(
+                    "async fn {}(&self, argument: {}) -> Result<{}, onc_rpc_server::DispatchError>;",
                     method_name, request_type, reply_type
                 ),
             );
@@ -462,6 +713,105 @@ impl StubEmitter {
                     indent + 4,
                     &mut self.out,
                     format_args!("let response = self.inner.{}(argument)?;", method_name),
+                );
+            }
+        }
+        if reply_type == "()" {
+            line(
+                indent + 4,
+                &mut self.out,
+                format_args!(
+                    "let payload = onc_rpc_xdr::XdrEncode::to_xdr_bytes(&())\
+                        .map_err(|_| onc_rpc_server::DispatchError::SystemError)?;"
+                ),
+            );
+        } else {
+            line(
+                indent + 4,
+                &mut self.out,
+                format_args!(
+                    "let payload = onc_rpc_xdr::XdrEncode::to_xdr_bytes(&response)\
+                        .map_err(|_| onc_rpc_server::DispatchError::SystemError)?;"
+                ),
+            );
+        }
+        line(
+            indent + 4,
+            &mut self.out,
+            format_args!("Ok(onc_rpc_server::ResponsePayload::success(payload))"),
+        );
+        line(indent, &mut self.out, format_args!("}}"));
+        Ok(())
+    }
+
+    fn emit_async_dispatch_arm(
+        &mut self,
+        procedure: &ProcedureDecl,
+        indent: usize,
+    ) -> Result<(), GeneratorError> {
+        let method_name = to_snake_case(&procedure.name);
+        let request_type = self.procedure_rust_type(
+            &procedure.argument_type,
+            &format!("{}_arg", method_name),
+            indent,
+        )?;
+        let reply_type = self.procedure_rust_type(
+            &procedure.return_type,
+            &format!("{}_ret", method_name),
+            indent,
+        )?;
+
+        line(
+            indent,
+            &mut self.out,
+            format_args!("{} => {{", procedure.number),
+        );
+        if request_type == "()" {
+            line(
+                indent + 4,
+                &mut self.out,
+                format_args!(
+                    "<() as onc_rpc_xdr::XdrDecode>::from_xdr_bytes(&request.payload)\
+                        .map_err(|_| onc_rpc_server::DispatchError::GarbageArgs)?;"
+                ),
+            );
+            if reply_type == "()" {
+                line(
+                    indent + 4,
+                    &mut self.out,
+                    format_args!("self.inner.{}().await?;", method_name),
+                );
+            } else {
+                line(
+                    indent + 4,
+                    &mut self.out,
+                    format_args!("let response = self.inner.{}().await?;", method_name),
+                );
+            }
+        } else {
+            line(
+                indent + 4,
+                &mut self.out,
+                format_args!(
+                    "let argument = <{} as onc_rpc_xdr::XdrDecode>::from_xdr_bytes(&request.payload)\
+                        .map_err(|_| onc_rpc_server::DispatchError::GarbageArgs)?;",
+                    request_type
+                ),
+            );
+            if reply_type == "()" {
+                line(
+                    indent + 4,
+                    &mut self.out,
+                    format_args!("self.inner.{}(argument).await?;", method_name),
+                );
+            } else {
+                line(
+                    indent + 4,
+                    &mut self.out,
+                    format_args!(
+                        "let response = self.inner.{}(argument).await?;",
+                        method_name
+                    ),
                 );
             }
         }

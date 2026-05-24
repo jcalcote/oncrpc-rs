@@ -13,7 +13,7 @@ Current goals:
 - TCP server/runtime support
 - `AUTH_NONE` and `AUTH_SYS`
 - generated Rust types, client stubs, and server stubs from `.x` definitions
-- async callback-style request handling
+- additive synchronous and asynchronous client/server generation
 - optional RPC-over-TLS / STARTTLS support where required by consumers
 
 Non-goals for the initial implementation:
@@ -42,13 +42,23 @@ That makes `onc-rpcgen` a required crate in the workspace, not an optional futur
 - `crates/onc-rpc-wire`: owned wire-format types, auth envelopes, and record-marking support
 - `crates/onc-rpc-auth`: auth types and helpers for `AUTH_NONE` / `AUTH_SYS`
 - `crates/onc-rpc-tls`: TLS and STARTTLS integration points
+- `crates/onc-rpc-xdr`: shared XDR encode/decode traits and helpers for generated code
 - `crates/onc-rpcgen`: core code generator for XDR types plus ONC RPC client/server stubs
 - `crates/onc-rpc-bind`: optional `rpcbind` / portmap support
 
 ## Current Status
 
-This repository currently contains a scaffolded workspace with buildable crate boundaries and placeholder APIs. The
-main immediate work is expected in `onc-rpc-runtime`, `onc-rpc-server`, and especially `onc-rpcgen`.
+The workspace now includes:
+
+- owned ONC RPC wire types and TCP record-marking support
+- generated Rust XDR types with `XdrEncode` / `XdrDecode` impls
+- per-file `.x` module generation with include-aware loading
+- typed synchronous and asynchronous client/server stub generation
+- a working `oncrpcgen` CLI that can generate usable output from real `.x` inputs
+
+The main remaining implementation work is in transport depth, interoperability,
+and broader runtime features beyond the current typed sync/async generation
+contract.
 
 See [docs/architecture.md](docs/architecture.md) for the current crate-boundary and code-generation direction.
 See [docs/codegen.md](docs/codegen.md) for fixture layout, output policy, and generator testing expectations.
@@ -57,19 +67,16 @@ See [docs/codegen.md](docs/codegen.md) for fixture layout, output policy, and ge
 
 Current Rust dependencies are intentionally small:
 
+- [`async-trait`](https://docs.rs/async-trait/latest/async_trait/): ergonomic async trait bridge for generated server APIs
 - [`tokio`](https://docs.rs/tokio/latest/tokio/): async runtime and networking primitives
 - [`bytes`](https://docs.rs/bytes/latest/bytes/): efficient byte buffer handling
+- [`clap`](https://docs.rs/clap/latest/clap/): command-line parsing for `oncrpcgen`
 - [`thiserror`](https://docs.rs/thiserror/latest/thiserror/): error definitions
 - [`tracing`](https://docs.rs/tracing/latest/tracing/): structured instrumentation hooks
 
 The workspace owns its wire-format layer directly in `onc-rpc-wire` rather than depending on a third-party ONC RPC
 codec crate. That keeps message layout, record-framing behavior, and future transport requirements under project
 control.
-
-Planned foundational dependency work for code generation:
-
-- evaluate an existing XDR parser/codegen crate such as `xdrgen` for the XDR type-generation layer
-- add or build the missing ONC RPC `program/version/procedure` generation in `onc-rpcgen`
 
 Current CI uses:
 
@@ -86,8 +93,7 @@ cargo check --workspace
 
 ## Near-Term Priorities
 
-- implement TCP record framing and reassembly
-- define a stable client call API
-- define a server registration and dispatch API
-- add initial `.x` parsing, type generation, and client/server stub generation
+- deepen TCP runtime and server transport behavior beyond the current stub-facing contracts
+- add timeout and per-call auth options to the generated/runtime API surface
+- improve `oncrpcgen` CLI help and consumer integration ergonomics
 - add interoperability tests against existing ONC RPC implementations

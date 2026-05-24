@@ -85,5 +85,11 @@ the decision in the commit message or PR description.
 - A clear subject line plus a short body is preferred when more context is
   needed.
 - When a commit message has a body, wrap it to 80 columns for readability.
+- Multi-line commit messages must contain literal newline characters. Do not
+  pass escaped `\n` sequences that will appear verbatim in the stored commit
+  message.
+- Prefer commit-message entry methods that preserve real line breaks, such as a
+  commit editor, `git commit -F <file>`, or a heredoc-backed `git commit
+  --amend -F -`.
 - Do not expand commit messages into long multi-paragraph narratives unless the
   change genuinely requires that level of explanation.

@@ -12,6 +12,7 @@ categories.workspace = true
 description = "Server registration and dispatch for ONC RPC services."
 
 [dependencies]
+async-trait.workspace = true
 bytes.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

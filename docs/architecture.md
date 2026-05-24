@@ -76,7 +76,7 @@ Owns client-side transport/runtime behavior:
 - connect timeouts
 - request/reply correlation
 - TCP record framing and reassembly
-- callback-style async request handling
+- synchronous and asynchronous client call handling
 
 This crate should be TCP-first. Optional discovery layers such as `rpcbind`
 must not shape the core runtime abstractions.
@@ -90,6 +90,7 @@ Owns server-side runtime behavior:
 - program/version dispatch
 - lifecycle management
 - integration with the runtime and wire layers
+- synchronous and asynchronous dispatch contracts
 
 Server registration should center on explicit `{program, version}` ownership and
 generated dispatch glue from `onc-rpcgen`.
@@ -162,6 +163,16 @@ The preferred direction is:
 - server-side generation emits explicit dispatch traits rather than hidden
   reflection-like machinery
 
+For asynchronous generated APIs, the preferred direction is:
+
+- preserve the synchronous APIs unchanged
+- add async support as an additive contract rather than replacing sync
+- keep async runtime interfaces executor-agnostic at the public API boundary
+- use explicit async client and server generation rather than implicit
+  background behavior
+- prefer separate generated async modules or types over mixing sync and async
+  methods on the same generated type
+
 The generator should also follow these operational rules:
 
 - output must be deterministic for a given `.x` input
@@ -192,6 +203,35 @@ That should influence API and implementation choices in practical ways:
 - keep generated code testable without requiring a live network stack
 - make runtime and dispatch behavior observable with deterministic inputs and
   outputs
+
+## Async Contract
+
+The project should treat asynchronous support as a first-class, additive layer
+on top of the current synchronous contract.
+
+The current preferred async design is:
+
+- `onc-rpc-runtime` keeps its synchronous transport contract and adds a parallel
+  async client transport contract
+- `onc-rpc-server` keeps its synchronous dispatch contract and adds a parallel
+  async dispatch contract
+- generated async client stubs target the async runtime contract
+- generated async server traits and dispatch glue target the async server
+  contract
+- generated sync and async APIs coexist rather than one mode being derived
+  implicitly from the other
+
+For generated async server traits, the preferred implementation strategy is:
+
+- use `async fn` in the generated trait surface for readability
+- use the `async-trait` crate to provide the current implementation bridge
+- keep the public contract explicit about async behavior rather than exposing
+  boxed-future-heavy signatures by default
+
+This is a pragmatic design choice, not a statement that `async-trait` must be
+used forever. If native trait async support evolves to the point that the
+project can remove that dependency without degrading ergonomics or testability,
+that change can be considered later as an intentional API evolution.
 
 ## Error Model
 

@@ -1,9 +1,13 @@
 use bytes::Bytes;
+use onc_rpc_runtime::async_trait as runtime_async_trait;
 use onc_rpc_runtime::{
-    AcceptedReply, AcceptedStatus, Client, ClientConfig, ClientTransport, MessageBody, OpaqueAuth,
-    Procedure, ProgramVersion, ReplyBody, RpcMessage, RuntimeError, Xid,
+    AcceptedReply, AcceptedStatus, AsyncClient, AsyncClientTransport, Client, ClientConfig,
+    ClientTransport, MessageBody, OpaqueAuth, Procedure, ProgramVersion, ReplyBody, RpcMessage,
+    RuntimeError, Xid,
 };
-use onc_rpc_server::{Dispatch, DispatchError, RequestContext};
+use onc_rpc_server::{
+    AsyncDispatch, Dispatch, DispatchError, RequestContext, async_trait as server_async_trait,
+};
 use onc_rpc_xdr::{XdrDecode, XdrEncode};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -63,6 +67,13 @@ impl ClientTransport for CaptureTransport {
                 status: AcceptedStatus::Success(self.reply_payload.clone()),
             })),
         })
+    }
+}
+
+#[runtime_async_trait]
+impl AsyncClientTransport for CaptureTransport {
+    async fn call(&self, request: RpcMessage) -> Result<RpcMessage, RuntimeError> {
+        ClientTransport::call(self, request)
     }
 }
 
@@ -178,6 +189,99 @@ fn generated_typed_dispatch_unmarshals_request_and_marshals_reply_payloads() {
             payload: request_payload,
         })
         .expect("dispatch should succeed");
+
+    let decoded_reply =
+        transfer_types::job_result_t::from_xdr_bytes(&response.payload).expect("decode reply");
+    assert_eq!(decoded_reply, sample_reply());
+    assert_eq!(
+        seen.lock().expect("mutex poisoned").as_slice(),
+        &[expected_request]
+    );
+}
+
+#[tokio::test]
+async fn generated_async_typed_client_marshals_request_and_reply_payloads() {
+    let seen = Arc::new(Mutex::new(None));
+    let expected_reply = sample_reply();
+    let reply_payload = expected_reply
+        .to_xdr_bytes()
+        .expect("reply payload should encode");
+    let transport = CaptureTransport {
+        seen: seen.clone(),
+        reply_payload,
+    };
+    let client = AsyncClient::new(client_config(), transport);
+    let stub = blob_service_basic_stubs::blob_service::blob_service_v1::async_client::BLOB_SERVICE_V1Client::new(
+        client,
+    );
+    let expected_request = sample_request();
+
+    let reply = stub
+        .blob_copy(expected_request.clone())
+        .await
+        .expect("typed async client call should succeed");
+
+    assert_eq!(reply, expected_reply);
+
+    let seen = seen
+        .lock()
+        .expect("mutex poisoned")
+        .clone()
+        .expect("request should be captured");
+    let MessageBody::Call(call) = seen.body else {
+        panic!("expected call message");
+    };
+    let decoded =
+        blob_service_basic::copy_request_t::from_xdr_bytes(&call.payload).expect("decode request");
+    assert_eq!(decoded, expected_request);
+}
+
+struct AsyncTypedService {
+    seen: Arc<Mutex<Vec<blob_service_basic::copy_request_t>>>,
+}
+
+#[server_async_trait]
+impl blob_service_basic_stubs::blob_service::blob_service_v1::async_server::BLOB_SERVICE_V1Service
+    for AsyncTypedService
+{
+    async fn blob_null(&self) -> Result<(), DispatchError> {
+        Ok(())
+    }
+
+    async fn blob_copy(
+        &self,
+        argument: blob_service_basic::copy_request_t,
+    ) -> Result<transfer_types::job_result_t, DispatchError> {
+        self.seen.lock().expect("mutex poisoned").push(argument);
+        Ok(sample_reply())
+    }
+}
+
+#[tokio::test]
+async fn generated_async_typed_dispatch_unmarshals_request_and_marshals_reply_payloads() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let dispatch = blob_service_basic_stubs::blob_service::blob_service_v1::async_server::BLOB_SERVICE_V1Dispatch::new(
+        AsyncTypedService { seen: seen.clone() },
+    );
+    let expected_request = sample_request();
+    let request_payload = expected_request
+        .to_xdr_bytes()
+        .expect("request payload should encode");
+
+    let response = dispatch
+        .dispatch(RequestContext {
+            xid: Xid(6),
+            program: ProgramVersion {
+                program: 200001,
+                version: 1,
+            },
+            procedure: Procedure(1),
+            credentials: OpaqueAuth::none(),
+            verifier: OpaqueAuth::none(),
+            payload: request_payload,
+        })
+        .await
+        .expect("async dispatch should succeed");
 
     let decoded_reply =
         transfer_types::job_result_t::from_xdr_bytes(&response.payload).expect("decode reply");

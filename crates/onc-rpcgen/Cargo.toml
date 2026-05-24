@@ -17,9 +17,11 @@ thiserror.workspace = true
 
 [dev-dependencies]
 assert_cmd = "2.0"
+async-trait.workspace = true
 bytes.workspace = true
 onc-rpc-runtime = { path = "../onc-rpc-runtime" }
 onc-rpc-server = { path = "../onc-rpc-server" }
 onc-rpc-xdr = { path = "../onc-rpc-xdr" }
 predicates = "3.1"
 tempfile = "3.23"
+tokio.workspace = true

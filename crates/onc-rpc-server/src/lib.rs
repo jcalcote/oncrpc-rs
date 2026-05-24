@@ -1,5 +1,6 @@
 //! Minimal server-side ONC RPC contracts for generated dispatch stubs.
 
+pub use async_trait::async_trait;
 use bytes::Bytes;
 use onc_rpc_runtime::{
     AcceptedReply, AcceptedStatus, MessageBody, OpaqueAuth, Procedure, ProgramVersion, ReplyBody,
@@ -9,6 +10,9 @@ use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use thiserror::Error;
+
+type DispatchResolution = (Xid, RequestContext, Option<Arc<dyn Dispatch>>);
+type AsyncDispatchResolution = (Xid, RequestContext, Option<Arc<dyn AsyncDispatch>>);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Program {
@@ -85,6 +89,11 @@ pub trait Dispatch: Send + Sync + 'static {
     fn dispatch(&self, request: RequestContext) -> Result<ResponsePayload, DispatchError>;
 }
 
+#[async_trait]
+pub trait AsyncDispatch: Send + Sync + 'static {
+    async fn dispatch(&self, request: RequestContext) -> Result<ResponsePayload, DispatchError>;
+}
+
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ServerError {
     #[error("service already registered for program {0:?}")]
@@ -135,11 +144,23 @@ impl ServerBuilder {
             dispatchers: HashMap::new(),
         }
     }
+
+    pub fn build_async(self) -> AsyncServer {
+        AsyncServer {
+            config: self.config,
+            dispatchers: HashMap::new(),
+        }
+    }
 }
 
 pub struct Server {
     config: ServerConfig,
     dispatchers: HashMap<Program, Arc<dyn Dispatch>>,
+}
+
+pub struct AsyncServer {
+    config: ServerConfig,
+    dispatchers: HashMap<Program, Arc<dyn AsyncDispatch>>,
 }
 
 impl Server {
@@ -164,6 +185,24 @@ impl Server {
     }
 
     pub fn handle_message(&self, message: RpcMessage) -> Result<RpcMessage, ServerError> {
+        let (xid, request, dispatcher) = self.resolve_dispatch(message)?;
+        let body = match dispatcher {
+            Some(dispatch) => match dispatch.dispatch(request) {
+                Ok(response) => success_reply(response),
+                Err(DispatchError::ProcedureUnavailable) => procedure_unavailable_reply(),
+                Err(DispatchError::GarbageArgs) => garbage_args_reply(),
+                Err(DispatchError::SystemError) => system_error_reply(),
+            },
+            None => program_unavailable_reply(),
+        };
+
+        Ok(RpcMessage {
+            xid,
+            body: MessageBody::Reply(body),
+        })
+    }
+
+    fn resolve_dispatch(&self, message: RpcMessage) -> Result<DispatchResolution, ServerError> {
         let xid = message.xid;
 
         let MessageBody::Call(call) = message.body else {
@@ -175,43 +214,50 @@ impl Server {
             version: call.program.version,
         };
         let dispatch_key = Program::from(program);
+        let request = RequestContext {
+            xid,
+            program,
+            procedure: call.procedure,
+            credentials: call.credentials,
+            verifier: call.verifier,
+            payload: call.payload,
+        };
 
-        let body = match self.dispatchers.get(&dispatch_key) {
-            Some(dispatch) => {
-                let request = RequestContext {
-                    xid,
-                    program,
-                    procedure: call.procedure,
-                    credentials: call.credentials,
-                    verifier: call.verifier,
-                    payload: call.payload,
-                };
+        Ok((xid, request, self.dispatchers.get(&dispatch_key).cloned()))
+    }
+}
 
-                match dispatch.dispatch(request) {
-                    Ok(response) => ReplyBody::Accepted(AcceptedReply {
-                        verifier: response.verifier,
-                        status: AcceptedStatus::Success(response.payload),
-                    }),
-                    Err(DispatchError::ProcedureUnavailable) => {
-                        ReplyBody::Accepted(AcceptedReply {
-                            verifier: OpaqueAuth::none(),
-                            status: AcceptedStatus::ProcedureUnavailable,
-                        })
-                    }
-                    Err(DispatchError::GarbageArgs) => ReplyBody::Accepted(AcceptedReply {
-                        verifier: OpaqueAuth::none(),
-                        status: AcceptedStatus::GarbageArgs,
-                    }),
-                    Err(DispatchError::SystemError) => ReplyBody::Accepted(AcceptedReply {
-                        verifier: OpaqueAuth::none(),
-                        status: AcceptedStatus::SystemError,
-                    }),
-                }
+impl AsyncServer {
+    pub fn config(&self) -> &ServerConfig {
+        &self.config
+    }
+
+    pub fn register<D: AsyncDispatch>(
+        &mut self,
+        program: Program,
+        dispatch: D,
+    ) -> Result<(), ServerError> {
+        match self.dispatchers.entry(program) {
+            std::collections::hash_map::Entry::Occupied(_) => {
+                Err(ServerError::DuplicateRegistration(program))
             }
-            None => ReplyBody::Accepted(AcceptedReply {
-                verifier: OpaqueAuth::none(),
-                status: AcceptedStatus::ProgramUnavailable,
-            }),
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(Arc::new(dispatch));
+                Ok(())
+            }
+        }
+    }
+
+    pub async fn handle_message(&self, message: RpcMessage) -> Result<RpcMessage, ServerError> {
+        let (xid, request, dispatcher) = self.resolve_dispatch(message)?;
+        let body = match dispatcher {
+            Some(dispatch) => match dispatch.dispatch(request).await {
+                Ok(response) => success_reply(response),
+                Err(DispatchError::ProcedureUnavailable) => procedure_unavailable_reply(),
+                Err(DispatchError::GarbageArgs) => garbage_args_reply(),
+                Err(DispatchError::SystemError) => system_error_reply(),
+            },
+            None => program_unavailable_reply(),
         };
 
         Ok(RpcMessage {
@@ -219,12 +265,74 @@ impl Server {
             body: MessageBody::Reply(body),
         })
     }
+
+    fn resolve_dispatch(
+        &self,
+        message: RpcMessage,
+    ) -> Result<AsyncDispatchResolution, ServerError> {
+        let xid = message.xid;
+
+        let MessageBody::Call(call) = message.body else {
+            return Err(ServerError::UnexpectedReplyMessage);
+        };
+
+        let program = ProgramVersion {
+            program: call.program.program,
+            version: call.program.version,
+        };
+        let dispatch_key = Program::from(program);
+        let request = RequestContext {
+            xid,
+            program,
+            procedure: call.procedure,
+            credentials: call.credentials,
+            verifier: call.verifier,
+            payload: call.payload,
+        };
+
+        Ok((xid, request, self.dispatchers.get(&dispatch_key).cloned()))
+    }
 }
 
 impl Default for ServerBuilder {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn success_reply(response: ResponsePayload) -> ReplyBody {
+    ReplyBody::Accepted(AcceptedReply {
+        verifier: response.verifier,
+        status: AcceptedStatus::Success(response.payload),
+    })
+}
+
+fn procedure_unavailable_reply() -> ReplyBody {
+    ReplyBody::Accepted(AcceptedReply {
+        verifier: OpaqueAuth::none(),
+        status: AcceptedStatus::ProcedureUnavailable,
+    })
+}
+
+fn garbage_args_reply() -> ReplyBody {
+    ReplyBody::Accepted(AcceptedReply {
+        verifier: OpaqueAuth::none(),
+        status: AcceptedStatus::GarbageArgs,
+    })
+}
+
+fn system_error_reply() -> ReplyBody {
+    ReplyBody::Accepted(AcceptedReply {
+        verifier: OpaqueAuth::none(),
+        status: AcceptedStatus::SystemError,
+    })
+}
+
+fn program_unavailable_reply() -> ReplyBody {
+    ReplyBody::Accepted(AcceptedReply {
+        verifier: OpaqueAuth::none(),
+        status: AcceptedStatus::ProgramUnavailable,
+    })
 }
 
 #[cfg(test)]
@@ -235,6 +343,22 @@ mod tests {
 
     impl Dispatch for EchoDispatch {
         fn dispatch(&self, request: RequestContext) -> Result<ResponsePayload, DispatchError> {
+            if request.procedure == Procedure(1) {
+                Ok(ResponsePayload::success(request.payload))
+            } else {
+                Err(DispatchError::ProcedureUnavailable)
+            }
+        }
+    }
+
+    struct AsyncEchoDispatch;
+
+    #[async_trait]
+    impl AsyncDispatch for AsyncEchoDispatch {
+        async fn dispatch(
+            &self,
+            request: RequestContext,
+        ) -> Result<ResponsePayload, DispatchError> {
             if request.procedure == Procedure(1) {
                 Ok(ResponsePayload::success(request.payload))
             } else {
@@ -359,12 +483,71 @@ mod tests {
         };
         server
             .register(program, EchoDispatch)
-            .expect("first registration should succeed");
+            .expect("initial registration should succeed");
 
         let error = server
             .register(program, EchoDispatch)
             .expect_err("duplicate registration must fail");
 
         assert_eq!(error, ServerError::DuplicateRegistration(program));
+    }
+
+    #[tokio::test]
+    async fn async_server_dispatches_registered_program() {
+        let mut server = ServerBuilder::new().build_async();
+        server
+            .register(
+                Program {
+                    number: 100_003,
+                    version: 3,
+                },
+                AsyncEchoDispatch,
+            )
+            .expect("registration should succeed");
+
+        let reply = server
+            .handle_message(call_message(
+                ProgramVersion {
+                    program: 100_003,
+                    version: 3,
+                },
+                Procedure(1),
+                b"echo",
+            ))
+            .await
+            .expect("dispatch should succeed");
+
+        assert_eq!(reply.xid, Xid(77));
+        match reply.body {
+            MessageBody::Reply(ReplyBody::Accepted(AcceptedReply {
+                status: AcceptedStatus::Success(payload),
+                ..
+            })) => assert_eq!(payload, Bytes::from_static(b"echo")),
+            other => panic!("unexpected reply {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn async_server_returns_program_unavailable_for_missing_registration() {
+        let server = ServerBuilder::new().build_async();
+        let reply = server
+            .handle_message(call_message(
+                ProgramVersion {
+                    program: 999,
+                    version: 1,
+                },
+                Procedure(1),
+                b"missing",
+            ))
+            .await
+            .expect("server should synthesize rpc reply");
+
+        match reply.body {
+            MessageBody::Reply(ReplyBody::Accepted(AcceptedReply {
+                status: AcceptedStatus::ProgramUnavailable,
+                ..
+            })) => {}
+            other => panic!("unexpected reply {other:?}"),
+        }
     }
 }
