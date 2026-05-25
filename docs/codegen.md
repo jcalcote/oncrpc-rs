@@ -8,7 +8,7 @@
 - Rust XDR serialization and deserialization implementations
 - ONC RPC program/version/procedure constants
 - client stubs, including `_with_options(...)` variants for request-level call
-  policy
+  policy such as timeout and auth overrides
 - server traits and dispatch glue
 
 This document narrows the operational contract for generator work so future

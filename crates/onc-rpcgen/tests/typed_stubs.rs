@@ -1,4 +1,5 @@
 use bytes::Bytes;
+use onc_rpc_auth::AuthSys;
 use onc_rpc_runtime::async_trait as runtime_async_trait;
 use onc_rpc_runtime::{
     AcceptedReply, AcceptedStatus, AsyncClient, AsyncClientTransport, CallOptions, CallTimeout,
@@ -196,6 +197,52 @@ fn generated_typed_client_with_options_forwards_call_options() {
         *seen_options.lock().expect("mutex poisoned"),
         Some(CallOptions {
             timeout: CallTimeout::Duration(std::time::Duration::from_secs(30)),
+            credentials: None,
+            verifier: None,
+        })
+    );
+}
+
+#[test]
+fn generated_typed_client_with_auth_sys_forwards_auth_options() {
+    let seen = Arc::new(Mutex::new(None));
+    let seen_options = Arc::new(Mutex::new(None));
+    let expected_reply = sample_reply();
+    let reply_payload = expected_reply
+        .to_xdr_bytes()
+        .expect("reply payload should encode");
+    let transport = CaptureTransport {
+        seen,
+        seen_options: seen_options.clone(),
+        reply_payload,
+    };
+    let client = Client::new(client_config(), transport);
+    let stub =
+        blob_service_basic_stubs::blob_service::blob_service_v1::client::BLOB_SERVICE_V1Client::new(
+            client,
+        );
+    let auth_sys = AuthSys {
+        stamp: 7,
+        machine_name: "blob-client".into(),
+        uid: 1000,
+        gid: 100,
+        gids: vec![101, 102],
+    };
+    let options = CallOptions::new()
+        .with_auth_sys(&auth_sys)
+        .expect("auth sys should encode");
+
+    let response = stub
+        .blob_copy_with_options(sample_request(), &options)
+        .expect("typed client call should succeed");
+
+    assert_eq!(response, expected_reply);
+    assert_eq!(
+        *seen_options.lock().expect("mutex poisoned"),
+        Some(CallOptions {
+            timeout: CallTimeout::Inherit,
+            credentials: Some(auth_sys.to_opaque_auth().expect("auth sys should encode")),
+            verifier: Some(OpaqueAuth::none()),
         })
     );
 }
@@ -321,6 +368,8 @@ async fn generated_async_typed_client_with_options_forwards_call_options() {
         *seen_options.lock().expect("mutex poisoned"),
         Some(CallOptions {
             timeout: CallTimeout::None,
+            credentials: None,
+            verifier: None,
         })
     );
 }

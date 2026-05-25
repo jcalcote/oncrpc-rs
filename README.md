@@ -51,10 +51,11 @@ That makes `onc-rpcgen` a required crate in the workspace, not an optional futur
 The workspace now includes:
 
 - owned ONC RPC wire types and TCP record-marking support
+- `AUTH_NONE` and `AUTH_SYS` helpers plus server-side auth decoding support
 - generated Rust XDR types with `XdrEncode` / `XdrDecode` impls
 - per-file `.x` module generation with include-aware loading
 - typed synchronous and asynchronous client/server stub generation
-- request-level call options with per-call timeout override support
+- request-level call options with per-call timeout and auth override support
 - optional synchronous and asynchronous `rpcbind` lookup/register/unregister
   support
 - optional direct TLS and STARTTLS client/server transports on top of the
@@ -140,6 +141,9 @@ When a specific call needs different timeout behavior than the client default,
 generated client stubs also expose `_with_options(...)` variants that take
 `onc_rpc_runtime::CallOptions`.
 
+Those options can also override per-call authentication policy, including
+explicit `AUTH_NONE` and `AUTH_SYS` credentials/verifiers.
+
 ## TLS and STARTTLS
 
 The workspace now includes optional TLS support in
@@ -197,7 +201,6 @@ cargo check --workspace
 
 - continue hardening runtime/server behavior under real interoperability and
   load
-- add per-call auth options to the generated/runtime API surface
 - improve `oncrpcgen` CLI help and consumer integration ergonomics
 - broaden TLS interoperability and policy coverage
 - broaden examples and generated-code polish for downstream consumers

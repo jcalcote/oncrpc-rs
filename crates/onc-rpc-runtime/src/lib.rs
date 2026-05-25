@@ -4,6 +4,7 @@ mod transport;
 
 pub use async_trait::async_trait;
 use bytes::{Buf, Bytes, BytesMut};
+pub use onc_rpc_auth as auth;
 pub use onc_rpc_wire::{
     AcceptedReply, AcceptedStatus, AuthStat, MAX_FRAGMENT_LEN, MessageBody, OpaqueAuth, Procedure,
     ProgramVersion, RecordMarker, RejectedReply, ReplyBody, RpcMessage, VersionRange, WireError,
@@ -68,6 +69,31 @@ impl ClientConfig {
         self.write_timeout = Some(timeout);
         self
     }
+
+    pub fn with_credentials(mut self, credentials: OpaqueAuth) -> Self {
+        self.credentials = credentials;
+        self
+    }
+
+    pub fn with_verifier(mut self, verifier: OpaqueAuth) -> Self {
+        self.verifier = verifier;
+        self
+    }
+
+    pub fn with_auth_none(mut self) -> Self {
+        self.credentials = OpaqueAuth::none();
+        self.verifier = OpaqueAuth::none();
+        self
+    }
+
+    pub fn with_auth_sys(
+        mut self,
+        auth_sys: &onc_rpc_auth::AuthSys,
+    ) -> Result<Self, onc_rpc_auth::AuthError> {
+        self.credentials = auth_sys.to_opaque_auth()?;
+        self.verifier = OpaqueAuth::none();
+        Ok(self)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,6 +135,8 @@ pub enum CallTimeout {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CallOptions {
     pub timeout: CallTimeout,
+    pub credentials: Option<OpaqueAuth>,
+    pub verifier: Option<OpaqueAuth>,
 }
 
 impl CallOptions {
@@ -132,6 +160,31 @@ impl CallOptions {
             CallTimeout::None => None,
             CallTimeout::Duration(timeout) => Some(timeout),
         }
+    }
+
+    pub fn with_credentials(mut self, credentials: OpaqueAuth) -> Self {
+        self.credentials = Some(credentials);
+        self
+    }
+
+    pub fn with_verifier(mut self, verifier: OpaqueAuth) -> Self {
+        self.verifier = Some(verifier);
+        self
+    }
+
+    pub fn with_auth_none(mut self) -> Self {
+        self.credentials = Some(OpaqueAuth::none());
+        self.verifier = Some(OpaqueAuth::none());
+        self
+    }
+
+    pub fn with_auth_sys(
+        mut self,
+        auth_sys: &onc_rpc_auth::AuthSys,
+    ) -> Result<Self, onc_rpc_auth::AuthError> {
+        self.credentials = Some(auth_sys.to_opaque_auth()?);
+        self.verifier = Some(OpaqueAuth::none());
+        Ok(self)
     }
 }
 
@@ -230,7 +283,7 @@ where
         options: &CallOptions,
     ) -> Result<CallResponse, RuntimeError> {
         let xid = Xid(self.next_xid.fetch_add(1, Ordering::Relaxed));
-        let wire_request = build_request_message(&self.config, xid, request);
+        let wire_request = build_request_message_with_options(&self.config, xid, request, options);
         let reply = self.transport.call_with_options(wire_request, options)?;
         handle_reply(xid, reply)
     }
@@ -293,7 +346,7 @@ where
         options: &CallOptions,
     ) -> Result<CallResponse, RuntimeError> {
         let xid = Xid(self.next_xid.fetch_add(1, Ordering::Relaxed));
-        let wire_request = build_request_message(&self.config, xid, request);
+        let wire_request = build_request_message_with_options(&self.config, xid, request, options);
         let reply = self
             .transport
             .call_with_options(wire_request, options)
@@ -357,6 +410,25 @@ fn build_request_message(config: &ClientConfig, xid: Xid, request: CallRequest) 
             request.payload,
         )),
     }
+}
+
+fn build_request_message_with_options(
+    config: &ClientConfig,
+    xid: Xid,
+    request: CallRequest,
+    options: &CallOptions,
+) -> RpcMessage {
+    let mut message = build_request_message(config, xid, request);
+    let MessageBody::Call(call) = &mut message.body else {
+        unreachable!("request message must be a call");
+    };
+    if let Some(credentials) = &options.credentials {
+        call.credentials = credentials.clone();
+    }
+    if let Some(verifier) = &options.verifier {
+        call.verifier = verifier.clone();
+    }
+    message
 }
 
 fn handle_reply(xid: Xid, reply: RpcMessage) -> Result<CallResponse, RuntimeError> {
@@ -570,6 +642,49 @@ mod tests {
                 .effective_timeout(Some(Duration::from_secs(5))),
             Some(Duration::from_secs(9))
         );
+        assert_eq!(
+            CallOptions::default(),
+            CallOptions {
+                timeout: CallTimeout::Inherit,
+                credentials: None,
+                verifier: None,
+            }
+        );
+    }
+
+    #[test]
+    fn client_config_and_call_options_can_encode_auth_sys() {
+        let auth_sys = onc_rpc_auth::AuthSys {
+            stamp: 9,
+            machine_name: "runtime-client".into(),
+            uid: 1000,
+            gid: 100,
+            gids: vec![101, 102],
+        };
+
+        let config = config()
+            .with_auth_sys(&auth_sys)
+            .expect("auth sys should encode");
+        assert_eq!(
+            onc_rpc_auth::decode_auth(&config.credentials).expect("decode should succeed"),
+            onc_rpc_auth::AuthFlavor::Sys(auth_sys.clone())
+        );
+        assert_eq!(config.verifier, OpaqueAuth::none());
+
+        let options = CallOptions::new()
+            .with_auth_sys(&auth_sys)
+            .expect("auth sys should encode");
+        assert_eq!(
+            onc_rpc_auth::decode_auth(
+                options
+                    .credentials
+                    .as_ref()
+                    .expect("credentials should be present")
+            )
+            .expect("decode should succeed"),
+            onc_rpc_auth::AuthFlavor::Sys(auth_sys)
+        );
+        assert_eq!(options.verifier, Some(OpaqueAuth::none()));
     }
 
     impl XdrEncode for EchoValue {

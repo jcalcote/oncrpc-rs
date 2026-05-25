@@ -16,6 +16,7 @@ async-trait.workspace = true
 bytes.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+onc-rpc-auth = { path = "../onc-rpc-auth" }
 onc-rpc-runtime = { path = "../onc-rpc-runtime" }
 onc-rpc-wire = { path = "../onc-rpc-wire" }
 

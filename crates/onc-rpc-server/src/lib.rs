@@ -79,6 +79,16 @@ impl ResponsePayload {
     }
 }
 
+impl RequestContext {
+    pub fn decode_credentials(&self) -> Result<onc_rpc_auth::AuthFlavor, onc_rpc_auth::AuthError> {
+        onc_rpc_auth::decode_auth(&self.credentials)
+    }
+
+    pub fn decode_verifier(&self) -> Result<onc_rpc_auth::AuthFlavor, onc_rpc_auth::AuthError> {
+        onc_rpc_auth::decode_auth(&self.verifier)
+    }
+}
+
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum DispatchError {
     #[error("procedure is unavailable")]

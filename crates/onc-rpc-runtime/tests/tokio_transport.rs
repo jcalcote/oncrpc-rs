@@ -1,4 +1,5 @@
 use bytes::{Bytes, BytesMut};
+use onc_rpc_auth::{AuthFlavor, AuthSys};
 use onc_rpc_runtime::{
     AcceptedReply, AcceptedStatus, AsyncClient, CallOptions, CallRequest, Client, ClientConfig,
     MessageBody, OpaqueAuth, Procedure, ProgramVersion, ReplyBody, RpcMessage,
@@ -346,6 +347,63 @@ async fn async_transport_can_override_timeout_per_call() {
         }
         other => panic!("expected call-timeout transport error, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn async_transport_sends_auth_sys_credentials_over_the_wire() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let addr = listener.local_addr().expect("local addr");
+    let expected_auth = AuthSys {
+        stamp: 42,
+        machine_name: "runtime-auth".into(),
+        uid: 1000,
+        gid: 100,
+        gids: vec![101, 102],
+    };
+    let expected_auth_for_server = expected_auth.clone();
+
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.expect("accept should succeed");
+        let (mut reader, mut writer) = stream.into_split();
+        let mut buffer = BytesMut::with_capacity(1024);
+        let request = next_message(&mut reader, &mut buffer).await;
+        let MessageBody::Call(call) = request.body else {
+            panic!("expected call message");
+        };
+        assert_eq!(
+            onc_rpc_auth::decode_auth(&call.credentials).expect("auth should decode"),
+            AuthFlavor::Sys(expected_auth_for_server)
+        );
+        assert_eq!(call.verifier, OpaqueAuth::none());
+        write_rpc_message(&mut writer, &reply(request.xid, Bytes::new()))
+            .await
+            .expect("reply should write");
+    });
+
+    let config = ClientConfig::new(addr)
+        .with_connect_timeout(Duration::from_secs(5))
+        .with_auth_sys(&expected_auth)
+        .expect("auth sys should encode");
+    let transport = TokioAsyncClientTransport::connect(&config)
+        .await
+        .expect("client should connect");
+    let client = AsyncClient::new(config, transport);
+
+    client
+        .call(CallRequest::new(
+            ProgramVersion {
+                program: 100_003,
+                version: 3,
+            },
+            Procedure(1),
+            Bytes::new(),
+        ))
+        .await
+        .expect("call should succeed");
+
+    server.await.expect("server task should complete");
 }
 
 #[tokio::test]

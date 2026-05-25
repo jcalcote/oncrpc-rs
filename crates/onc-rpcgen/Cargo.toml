@@ -19,6 +19,7 @@ thiserror.workspace = true
 assert_cmd = "2.0"
 async-trait.workspace = true
 bytes.workspace = true
+onc-rpc-auth = { path = "../onc-rpc-auth" }
 onc-rpc-runtime = { path = "../onc-rpc-runtime" }
 onc-rpc-server = { path = "../onc-rpc-server" }
 onc-rpc-xdr = { path = "../onc-rpc-xdr" }

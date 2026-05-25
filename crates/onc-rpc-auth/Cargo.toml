@@ -12,5 +12,7 @@ categories.workspace = true
 description = "Authentication types and helpers for ONC RPC clients and servers."
 
 [dependencies]
+bytes.workspace = true
 thiserror.workspace = true
-
+onc-rpc-wire = { path = "../onc-rpc-wire" }
+onc-rpc-xdr = { path = "../onc-rpc-xdr" }

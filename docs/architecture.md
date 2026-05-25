@@ -79,6 +79,7 @@ Owns client-side transport/runtime behavior:
 - default per-call timeout and write timeout policy
 - request-level call options that can inherit, disable, or override the client
   default timeout
+- client-default and per-call auth selection for `AUTH_NONE` and `AUTH_SYS`
 - request/reply correlation
 - TCP record framing and reassembly
 - synchronous and asynchronous client call handling
@@ -116,6 +117,8 @@ requirements. In practice that means:
 - request-level timeout policy should override client defaults explicitly and
   support three states: inherit the client default, disable the timeout for
   that call, or provide a call-specific duration
+- auth policy should be explicit at both the client-default and per-call
+  levels, with ergonomic helpers for `AUTH_NONE` and `AUTH_SYS`
 
 ### `onc-rpc-server`
 

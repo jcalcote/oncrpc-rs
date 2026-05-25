@@ -1,3 +1,4 @@
+use onc_rpc_auth::{AuthFlavor, AuthSys};
 use onc_rpc_runtime::{
     AsyncClient, Client, ClientConfig, Procedure, ProgramVersion, TokioAsyncClientTransport,
     TokioClientTransport,
@@ -52,6 +53,25 @@ impl AsyncDispatch for AsyncReorderingDispatch {
 struct AsyncConcurrentDispatch {
     current: Arc<AtomicUsize>,
     max_seen: Arc<AtomicUsize>,
+}
+
+struct AsyncAuthInspectDispatch;
+
+#[async_trait]
+impl AsyncDispatch for AsyncAuthInspectDispatch {
+    async fn dispatch(&self, request: RequestContext) -> Result<ResponsePayload, DispatchError> {
+        match request
+            .decode_credentials()
+            .map_err(|_| DispatchError::GarbageArgs)?
+        {
+            AuthFlavor::Sys(auth) => Ok(ResponsePayload::success(
+                auth.uid
+                    .to_xdr_bytes()
+                    .map_err(|_| DispatchError::SystemError)?,
+            )),
+            AuthFlavor::None => Err(DispatchError::ProcedureUnavailable),
+        }
+    }
 }
 
 #[async_trait]
@@ -110,6 +130,63 @@ async fn async_server_transport_dispatches_over_real_tokio_io() {
         .expect("call should succeed");
 
     assert_eq!(reply, 99);
+    drop(client);
+    serve
+        .await
+        .expect("server task should join")
+        .expect("server transport should complete");
+}
+
+#[tokio::test]
+async fn async_server_transport_decodes_auth_sys_credentials() {
+    let mut server = ServerBuilder::new()
+        .with_bind_addr(loopback_addr())
+        .build_async();
+    server
+        .register(
+            Program {
+                number: 100_003,
+                version: 3,
+            },
+            AsyncAuthInspectDispatch,
+        )
+        .expect("registration should succeed");
+
+    let transport = TokioAsyncServerTransport::bind(server)
+        .await
+        .expect("server should bind");
+    let addr = transport.local_addr().expect("local addr");
+    let serve = tokio::spawn(async move { transport.accept_once().await });
+
+    let auth_sys = AuthSys {
+        stamp: 7,
+        machine_name: "server-auth".into(),
+        uid: 1000,
+        gid: 100,
+        gids: vec![101],
+    };
+    let config = ClientConfig::new(addr)
+        .with_connect_timeout(Duration::from_secs(5))
+        .with_auth_sys(&auth_sys)
+        .expect("auth sys should encode");
+    let client_transport = TokioAsyncClientTransport::connect(&config)
+        .await
+        .expect("client should connect");
+    let client = AsyncClient::new(config, client_transport);
+
+    let reply: u32 = client
+        .call_typed(
+            ProgramVersion {
+                program: 100_003,
+                version: 3,
+            },
+            Procedure(1),
+            &99_u32,
+        )
+        .await
+        .expect("call should succeed");
+
+    assert_eq!(reply, 1000);
     drop(client);
     serve
         .await

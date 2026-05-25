@@ -30,7 +30,6 @@ This specification covers the current `onc-rpcgen` implementation:
 This specification does not yet define:
 
 - exact `build.rs` integration API
-- per-call auth generated API variants
 - rpcbind integration
 - TLS-specific generation behavior
 
@@ -131,6 +130,9 @@ By default this means:
 - program/version/procedure constants
 - synchronous and asynchronous client stubs
 - synchronous and asynchronous server traits and dispatch glue
+
+Generated client stubs also include `_with_options(...)` variants for
+request-level timeout and auth overrides.
 
 If the input schema pulls in additional `.x` files through includes, generation
 should emit the reachable sibling Rust type modules needed to represent those
