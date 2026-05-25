@@ -1,4 +1,4 @@
-//! Optional rpcbind / portmap support.
+//! Optional rpcbind v4 support.
 
 use async_trait::async_trait;
 use bytes::BytesMut;
@@ -57,6 +57,8 @@ pub enum BindError {
     InvalidUniversalAddress(String),
     #[error("rpcbind operations require a specific local service address, not {0}")]
     UnspecifiedServiceAddress(SocketAddr),
+    #[error("server transport auto-publish requires a configured rpcbind address")]
+    MissingRpcbindAddress,
     #[error("server transport failure: {0}")]
     ServerTransport(String),
 }
@@ -519,64 +521,46 @@ pub trait TokioAsyncServerTransportRpcbindExt {
     async fn publish_rpcbind(&self, rpcbind_addr: SocketAddr) -> Result<(), BindError>;
     async fn unpublish_rpcbind(&self, rpcbind_addr: SocketAddr) -> Result<(), BindError>;
     async fn maybe_publish_rpcbind(&self, rpcbind_addr: SocketAddr) -> Result<bool, BindError>;
+    async fn accept_once_with_rpcbind(&self) -> Result<(), BindError>;
+    async fn serve_with_rpcbind(self) -> Result<(), BindError>
+    where
+        Self: Sized;
 }
 
 #[async_trait]
 impl TokioAsyncServerTransportRpcbindExt for TokioAsyncServerTransport {
     async fn publish_rpcbind(&self, rpcbind_addr: SocketAddr) -> Result<(), BindError> {
-        let service_addr = checked_service_addr(
-            self.local_addr()
-                .map_err(|err| BindError::ServerTransport(err.to_string()))?,
-        )?;
-        let client = AsyncRpcbindClient::connect(rpcbind_addr).await?;
-        let owner = self
-            .config()
-            .service_name
-            .clone()
-            .unwrap_or_else(|| DEFAULT_OWNER.into());
-
-        for program in self.registered_programs() {
-            client
-                .register_tcp(
-                    service_addr,
-                    ProgramVersion {
-                        program: program.number,
-                        version: program.version,
-                    },
-                    owner.clone(),
-                )
-                .await?;
-        }
-
-        Ok(())
+        let info = PublicationInfo {
+            rpcbind_addr,
+            service_addr: checked_service_addr(
+                self.local_addr()
+                    .map_err(|err| BindError::ServerTransport(err.to_string()))?,
+            )?,
+            owner: self
+                .config()
+                .service_name
+                .clone()
+                .unwrap_or_else(|| DEFAULT_OWNER.into()),
+            programs: self.registered_programs(),
+        };
+        publish_tcp_programs_async(&info).await
     }
 
     async fn unpublish_rpcbind(&self, rpcbind_addr: SocketAddr) -> Result<(), BindError> {
-        let service_addr = checked_service_addr(
-            self.local_addr()
-                .map_err(|err| BindError::ServerTransport(err.to_string()))?,
-        )?;
-        let client = AsyncRpcbindClient::connect(rpcbind_addr).await?;
-        let owner = self
-            .config()
-            .service_name
-            .clone()
-            .unwrap_or_else(|| DEFAULT_OWNER.into());
-
-        for program in self.registered_programs() {
-            client
-                .unregister_tcp(
-                    service_addr,
-                    ProgramVersion {
-                        program: program.number,
-                        version: program.version,
-                    },
-                    owner.clone(),
-                )
-                .await?;
-        }
-
-        Ok(())
+        let info = PublicationInfo {
+            rpcbind_addr,
+            service_addr: checked_service_addr(
+                self.local_addr()
+                    .map_err(|err| BindError::ServerTransport(err.to_string()))?,
+            )?,
+            owner: self
+                .config()
+                .service_name
+                .clone()
+                .unwrap_or_else(|| DEFAULT_OWNER.into()),
+            programs: self.registered_programs(),
+        };
+        unpublish_tcp_programs_async(&info).await
     }
 
     async fn maybe_publish_rpcbind(&self, rpcbind_addr: SocketAddr) -> Result<bool, BindError> {
@@ -586,12 +570,66 @@ impl TokioAsyncServerTransportRpcbindExt for TokioAsyncServerTransport {
         self.publish_rpcbind(rpcbind_addr).await?;
         Ok(true)
     }
+
+    async fn accept_once_with_rpcbind(&self) -> Result<(), BindError> {
+        let publication = publication_info(
+            self.config(),
+            self.local_addr()
+                .map_err(|err| BindError::ServerTransport(err.to_string()))?,
+            self.registered_programs(),
+        )?;
+        if let Some(info) = &publication {
+            publish_tcp_programs_async(info).await?;
+        }
+        let result = self
+            .accept_once()
+            .await
+            .map_err(|err| BindError::ServerTransport(err.to_string()));
+        if let Some(info) = &publication {
+            let unpublish = unpublish_tcp_programs_async(info).await;
+            result?;
+            unpublish?;
+            return Ok(());
+        }
+        result
+    }
+
+    async fn serve_with_rpcbind(self) -> Result<(), BindError>
+    where
+        Self: Sized,
+    {
+        let publication = publication_info(
+            self.config(),
+            self.local_addr()
+                .map_err(|err| BindError::ServerTransport(err.to_string()))?,
+            self.registered_programs(),
+        )?;
+        if let Some(info) = &publication {
+            publish_tcp_programs_async(info).await?;
+        }
+        let result = self
+            .serve()
+            .await
+            .map_err(|err| BindError::ServerTransport(err.to_string()));
+        if let Some(info) = &publication {
+            let unpublish = unpublish_tcp_programs_async(info).await;
+            result?;
+            unpublish?;
+            return Ok(());
+        }
+        result
+    }
 }
 
+#[async_trait]
 pub trait TokioServerTransportRpcbindExt {
     fn publish_rpcbind(&self, rpcbind_addr: SocketAddr) -> Result<(), BindError>;
     fn unpublish_rpcbind(&self, rpcbind_addr: SocketAddr) -> Result<(), BindError>;
     fn maybe_publish_rpcbind(&self, rpcbind_addr: SocketAddr) -> Result<bool, BindError>;
+    async fn accept_once_with_rpcbind(&self) -> Result<(), BindError>;
+    async fn serve_with_rpcbind(self) -> Result<(), BindError>
+    where
+        Self: Sized;
 }
 
 #[async_trait]
@@ -599,65 +637,215 @@ pub trait TokioAsyncUdpServerTransportRpcbindExt {
     async fn publish_rpcbind(&self, rpcbind_addr: SocketAddr) -> Result<(), BindError>;
     async fn unpublish_rpcbind(&self, rpcbind_addr: SocketAddr) -> Result<(), BindError>;
     async fn maybe_publish_rpcbind(&self, rpcbind_addr: SocketAddr) -> Result<bool, BindError>;
+    async fn accept_once_with_rpcbind(&self) -> Result<(), BindError>;
+    async fn serve_with_rpcbind(self) -> Result<(), BindError>
+    where
+        Self: Sized;
 }
 
+#[async_trait]
 pub trait TokioUdpServerTransportRpcbindExt {
     fn publish_rpcbind(&self, rpcbind_addr: SocketAddr) -> Result<(), BindError>;
     fn unpublish_rpcbind(&self, rpcbind_addr: SocketAddr) -> Result<(), BindError>;
     fn maybe_publish_rpcbind(&self, rpcbind_addr: SocketAddr) -> Result<bool, BindError>;
+    async fn accept_once_with_rpcbind(&self) -> Result<(), BindError>;
+    async fn serve_with_rpcbind(self) -> Result<(), BindError>
+    where
+        Self: Sized;
 }
 
-impl TokioServerTransportRpcbindExt for TokioServerTransport {
-    fn publish_rpcbind(&self, rpcbind_addr: SocketAddr) -> Result<(), BindError> {
-        let service_addr = checked_service_addr(
-            self.local_addr()
-                .map_err(|err| BindError::ServerTransport(err.to_string()))?,
-        )?;
-        let client = RpcbindClient::connect(rpcbind_addr)?;
-        let owner = self
-            .config()
+#[derive(Debug, Clone)]
+struct PublicationInfo {
+    rpcbind_addr: SocketAddr,
+    service_addr: SocketAddr,
+    owner: String,
+    programs: Vec<onc_rpc_server::Program>,
+}
+
+fn publication_info(
+    config: &onc_rpc_server::ServerConfig,
+    service_addr: SocketAddr,
+    programs: Vec<onc_rpc_server::Program>,
+) -> Result<Option<PublicationInfo>, BindError> {
+    if !config.auto_publish {
+        return Ok(None);
+    }
+    let rpcbind_addr = config
+        .rpcbind_addr
+        .ok_or(BindError::MissingRpcbindAddress)?;
+    Ok(Some(PublicationInfo {
+        rpcbind_addr,
+        service_addr: checked_service_addr(service_addr)?,
+        owner: config
             .service_name
             .clone()
-            .unwrap_or_else(|| DEFAULT_OWNER.into());
+            .unwrap_or_else(|| DEFAULT_OWNER.into()),
+        programs,
+    }))
+}
 
-        for program in self.registered_programs() {
-            client.register_tcp(
-                service_addr,
+async fn publish_tcp_programs_async(info: &PublicationInfo) -> Result<(), BindError> {
+    let client = AsyncRpcbindClient::connect(info.rpcbind_addr).await?;
+    for program in &info.programs {
+        client
+            .register_tcp(
+                info.service_addr,
                 ProgramVersion {
                     program: program.number,
                     version: program.version,
                 },
-                owner.clone(),
-            )?;
-        }
+                info.owner.clone(),
+            )
+            .await?;
+    }
+    Ok(())
+}
 
-        Ok(())
+async fn unpublish_tcp_programs_async(info: &PublicationInfo) -> Result<(), BindError> {
+    let client = AsyncRpcbindClient::connect(info.rpcbind_addr).await?;
+    for program in &info.programs {
+        client
+            .unregister_tcp(
+                info.service_addr,
+                ProgramVersion {
+                    program: program.number,
+                    version: program.version,
+                },
+                info.owner.clone(),
+            )
+            .await?;
+    }
+    Ok(())
+}
+
+fn publish_tcp_programs(info: &PublicationInfo) -> Result<(), BindError> {
+    let client = RpcbindClient::connect(info.rpcbind_addr)?;
+    for program in &info.programs {
+        client.register_tcp(
+            info.service_addr,
+            ProgramVersion {
+                program: program.number,
+                version: program.version,
+            },
+            info.owner.clone(),
+        )?;
+    }
+    Ok(())
+}
+
+fn unpublish_tcp_programs(info: &PublicationInfo) -> Result<(), BindError> {
+    let client = RpcbindClient::connect(info.rpcbind_addr)?;
+    for program in &info.programs {
+        client.unregister_tcp(
+            info.service_addr,
+            ProgramVersion {
+                program: program.number,
+                version: program.version,
+            },
+            info.owner.clone(),
+        )?;
+    }
+    Ok(())
+}
+
+async fn publish_udp_programs_async(info: &PublicationInfo) -> Result<(), BindError> {
+    let client = AsyncRpcbindClient::connect(info.rpcbind_addr).await?;
+    for program in &info.programs {
+        client
+            .register_udp(
+                info.service_addr,
+                ProgramVersion {
+                    program: program.number,
+                    version: program.version,
+                },
+                info.owner.clone(),
+            )
+            .await?;
+    }
+    Ok(())
+}
+
+async fn unpublish_udp_programs_async(info: &PublicationInfo) -> Result<(), BindError> {
+    let client = AsyncRpcbindClient::connect(info.rpcbind_addr).await?;
+    for program in &info.programs {
+        client
+            .unregister_udp(
+                info.service_addr,
+                ProgramVersion {
+                    program: program.number,
+                    version: program.version,
+                },
+                info.owner.clone(),
+            )
+            .await?;
+    }
+    Ok(())
+}
+
+fn publish_udp_programs(info: &PublicationInfo) -> Result<(), BindError> {
+    let client = RpcbindClient::connect(info.rpcbind_addr)?;
+    for program in &info.programs {
+        client.register_udp(
+            info.service_addr,
+            ProgramVersion {
+                program: program.number,
+                version: program.version,
+            },
+            info.owner.clone(),
+        )?;
+    }
+    Ok(())
+}
+
+fn unpublish_udp_programs(info: &PublicationInfo) -> Result<(), BindError> {
+    let client = RpcbindClient::connect(info.rpcbind_addr)?;
+    for program in &info.programs {
+        client.unregister_udp(
+            info.service_addr,
+            ProgramVersion {
+                program: program.number,
+                version: program.version,
+            },
+            info.owner.clone(),
+        )?;
+    }
+    Ok(())
+}
+
+#[async_trait]
+impl TokioServerTransportRpcbindExt for TokioServerTransport {
+    fn publish_rpcbind(&self, rpcbind_addr: SocketAddr) -> Result<(), BindError> {
+        let info = PublicationInfo {
+            rpcbind_addr,
+            service_addr: checked_service_addr(
+                self.local_addr()
+                    .map_err(|err| BindError::ServerTransport(err.to_string()))?,
+            )?,
+            owner: self
+                .config()
+                .service_name
+                .clone()
+                .unwrap_or_else(|| DEFAULT_OWNER.into()),
+            programs: self.registered_programs(),
+        };
+        publish_tcp_programs(&info)
     }
 
     fn unpublish_rpcbind(&self, rpcbind_addr: SocketAddr) -> Result<(), BindError> {
-        let service_addr = checked_service_addr(
-            self.local_addr()
-                .map_err(|err| BindError::ServerTransport(err.to_string()))?,
-        )?;
-        let client = RpcbindClient::connect(rpcbind_addr)?;
-        let owner = self
-            .config()
-            .service_name
-            .clone()
-            .unwrap_or_else(|| DEFAULT_OWNER.into());
-
-        for program in self.registered_programs() {
-            client.unregister_tcp(
-                service_addr,
-                ProgramVersion {
-                    program: program.number,
-                    version: program.version,
-                },
-                owner.clone(),
-            )?;
-        }
-
-        Ok(())
+        let info = PublicationInfo {
+            rpcbind_addr,
+            service_addr: checked_service_addr(
+                self.local_addr()
+                    .map_err(|err| BindError::ServerTransport(err.to_string()))?,
+            )?,
+            owner: self
+                .config()
+                .service_name
+                .clone()
+                .unwrap_or_else(|| DEFAULT_OWNER.into()),
+            programs: self.registered_programs(),
+        };
+        unpublish_tcp_programs(&info)
     }
 
     fn maybe_publish_rpcbind(&self, rpcbind_addr: SocketAddr) -> Result<bool, BindError> {
@@ -666,6 +854,55 @@ impl TokioServerTransportRpcbindExt for TokioServerTransport {
         }
         self.publish_rpcbind(rpcbind_addr)?;
         Ok(true)
+    }
+
+    async fn accept_once_with_rpcbind(&self) -> Result<(), BindError> {
+        let publication = publication_info(
+            self.config(),
+            self.local_addr()
+                .map_err(|err| BindError::ServerTransport(err.to_string()))?,
+            self.registered_programs(),
+        )?;
+        if let Some(info) = &publication {
+            publish_tcp_programs(info)?;
+        }
+        let result = self
+            .accept_once()
+            .await
+            .map_err(|err| BindError::ServerTransport(err.to_string()));
+        if let Some(info) = &publication {
+            let unpublish = unpublish_tcp_programs(info);
+            result?;
+            unpublish?;
+            return Ok(());
+        }
+        result
+    }
+
+    async fn serve_with_rpcbind(self) -> Result<(), BindError>
+    where
+        Self: Sized,
+    {
+        let publication = publication_info(
+            self.config(),
+            self.local_addr()
+                .map_err(|err| BindError::ServerTransport(err.to_string()))?,
+            self.registered_programs(),
+        )?;
+        if let Some(info) = &publication {
+            publish_tcp_programs(info)?;
+        }
+        let result = self
+            .serve()
+            .await
+            .map_err(|err| BindError::ServerTransport(err.to_string()));
+        if let Some(info) = &publication {
+            let unpublish = unpublish_tcp_programs(info);
+            result?;
+            unpublish?;
+            return Ok(());
+        }
+        result
     }
 }
 
@@ -734,8 +971,58 @@ impl TokioAsyncUdpServerTransportRpcbindExt for TokioAsyncUdpServerTransport {
         self.publish_rpcbind(rpcbind_addr).await?;
         Ok(true)
     }
+
+    async fn accept_once_with_rpcbind(&self) -> Result<(), BindError> {
+        let publication = publication_info(
+            self.config(),
+            self.local_addr()
+                .map_err(|err| BindError::ServerTransport(err.to_string()))?,
+            self.registered_programs(),
+        )?;
+        if let Some(info) = &publication {
+            publish_udp_programs_async(info).await?;
+        }
+        let result = self
+            .accept_once()
+            .await
+            .map_err(|err| BindError::ServerTransport(err.to_string()));
+        if let Some(info) = &publication {
+            let unpublish = unpublish_udp_programs_async(info).await;
+            result?;
+            unpublish?;
+            return Ok(());
+        }
+        result
+    }
+
+    async fn serve_with_rpcbind(self) -> Result<(), BindError>
+    where
+        Self: Sized,
+    {
+        let publication = publication_info(
+            self.config(),
+            self.local_addr()
+                .map_err(|err| BindError::ServerTransport(err.to_string()))?,
+            self.registered_programs(),
+        )?;
+        if let Some(info) = &publication {
+            publish_udp_programs_async(info).await?;
+        }
+        let result = self
+            .serve()
+            .await
+            .map_err(|err| BindError::ServerTransport(err.to_string()));
+        if let Some(info) = &publication {
+            let unpublish = unpublish_udp_programs_async(info).await;
+            result?;
+            unpublish?;
+            return Ok(());
+        }
+        result
+    }
 }
 
+#[async_trait]
 impl TokioUdpServerTransportRpcbindExt for TokioUdpServerTransport {
     fn publish_rpcbind(&self, rpcbind_addr: SocketAddr) -> Result<(), BindError> {
         let service_addr = checked_service_addr(
@@ -795,6 +1082,55 @@ impl TokioUdpServerTransportRpcbindExt for TokioUdpServerTransport {
         }
         self.publish_rpcbind(rpcbind_addr)?;
         Ok(true)
+    }
+
+    async fn accept_once_with_rpcbind(&self) -> Result<(), BindError> {
+        let publication = publication_info(
+            self.config(),
+            self.local_addr()
+                .map_err(|err| BindError::ServerTransport(err.to_string()))?,
+            self.registered_programs(),
+        )?;
+        if let Some(info) = &publication {
+            publish_udp_programs(info)?;
+        }
+        let result = self
+            .accept_once()
+            .await
+            .map_err(|err| BindError::ServerTransport(err.to_string()));
+        if let Some(info) = &publication {
+            let unpublish = unpublish_udp_programs(info);
+            result?;
+            unpublish?;
+            return Ok(());
+        }
+        result
+    }
+
+    async fn serve_with_rpcbind(self) -> Result<(), BindError>
+    where
+        Self: Sized,
+    {
+        let publication = publication_info(
+            self.config(),
+            self.local_addr()
+                .map_err(|err| BindError::ServerTransport(err.to_string()))?,
+            self.registered_programs(),
+        )?;
+        if let Some(info) = &publication {
+            publish_udp_programs(info)?;
+        }
+        let result = self
+            .serve()
+            .await
+            .map_err(|err| BindError::ServerTransport(err.to_string()));
+        if let Some(info) = &publication {
+            let unpublish = unpublish_udp_programs(info);
+            result?;
+            unpublish?;
+            return Ok(());
+        }
+        result
     }
 }
 
@@ -1280,6 +1616,7 @@ mod tests {
         let mut server = ServerBuilder::new()
             .with_bind_addr(loopback())
             .with_auto_publish(true)
+            .with_rpcbind_addr(rpcbind_addr)
             .with_service_name("time-service")
             .build_async();
         struct Noop;
@@ -1302,37 +1639,60 @@ mod tests {
         let transport = TokioAsyncServerTransport::bind(server)
             .await
             .expect("service transport should bind");
-
-        assert!(
-            transport
-                .maybe_publish_rpcbind(rpcbind_addr)
-                .await
-                .expect("publish should succeed")
-        );
+        let transport_addr = transport.local_addr().expect("local addr");
+        let serve_task = tokio::spawn(async move { transport.accept_once_with_rpcbind().await });
 
         let resolver = AsyncRpcbindClient::connect(rpcbind_addr)
             .await
             .expect("connect should succeed");
-        let resolved = resolver
-            .lookup_tcp_addr(ProgramVersion {
-                program: published.number,
-                version: published.version,
-            })
-            .await
-            .expect("lookup should succeed");
-        assert_eq!(resolved, transport.local_addr().expect("local addr"));
+        let program = ProgramVersion {
+            program: published.number,
+            version: published.version,
+        };
+        let mut resolved = None;
+        for _ in 0..20 {
+            match resolver.lookup_tcp_addr(program).await {
+                Ok(addr) => {
+                    resolved = Some(addr);
+                    break;
+                }
+                Err(BindError::NotFound { .. }) => {
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await
+                }
+                Err(error) => panic!("unexpected lookup failure: {error}"),
+            }
+        }
+        assert_eq!(
+            resolved.expect("auto-published entry should appear"),
+            transport_addr
+        );
 
-        transport
-            .unpublish_rpcbind(rpcbind_addr)
+        let client = AsyncClient::new(
+            ClientConfig::new(transport_addr)
+                .with_connect_timeout(std::time::Duration::from_secs(5)),
+            TokioAsyncClientTransport::connect(
+                &ClientConfig::new(transport_addr)
+                    .with_connect_timeout(std::time::Duration::from_secs(5)),
+            )
             .await
-            .expect("unpublish should succeed");
+            .expect("client transport should connect"),
+        );
+        client
+            .call(onc_rpc_runtime::CallRequest::new(
+                program,
+                Procedure(1),
+                bytes::Bytes::from_static(b"ping"),
+            ))
+            .await
+            .expect("request should succeed");
+        drop(client);
+
+        serve_task
+            .await
+            .expect("serve task should join")
+            .expect("auto-published accept should succeed");
         assert!(matches!(
-            resolver
-                .lookup_tcp_addr(ProgramVersion {
-                    program: published.number,
-                    version: published.version,
-                })
-                .await,
+            resolver.lookup_tcp_addr(program).await,
             Err(BindError::NotFound { .. })
         ));
 
@@ -1367,6 +1727,7 @@ mod tests {
         let mut server = ServerBuilder::new()
             .with_bind_addr(loopback())
             .with_auto_publish(true)
+            .with_rpcbind_addr(rpcbind_addr)
             .with_service_name("udp-time-service")
             .build_async();
         struct Noop;
@@ -1389,40 +1750,67 @@ mod tests {
         let transport = TokioAsyncUdpServerTransport::bind(server)
             .await
             .expect("service transport should bind");
-
-        assert!(
-            transport
-                .maybe_publish_rpcbind(rpcbind_addr)
-                .await
-                .expect("publish should succeed")
-        );
+        let transport_addr = transport.local_addr().expect("local addr");
+        let serve_task = tokio::spawn(async move { transport.accept_once_with_rpcbind().await });
 
         let resolver = AsyncRpcbindClient::connect(rpcbind_addr)
             .await
             .expect("connect should succeed");
-        let resolved = resolver
-            .lookup_udp_addr(ProgramVersion {
-                program: published.number,
-                version: published.version,
-            })
-            .await
-            .expect("lookup should succeed");
-        assert_eq!(resolved, transport.local_addr().expect("local addr"));
+        let program = ProgramVersion {
+            program: published.number,
+            version: published.version,
+        };
+        let mut resolved = None;
+        for _ in 0..20 {
+            match resolver.lookup_udp_addr(program).await {
+                Ok(addr) => {
+                    resolved = Some(addr);
+                    break;
+                }
+                Err(BindError::NotFound { .. }) => {
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await
+                }
+                Err(error) => panic!("unexpected lookup failure: {error}"),
+            }
+        }
+        assert_eq!(
+            resolved.expect("auto-published entry should appear"),
+            transport_addr
+        );
 
-        transport
-            .unpublish_rpcbind(rpcbind_addr)
+        let client_config = ClientConfig::new(transport_addr)
+            .with_connect_timeout(std::time::Duration::from_secs(5));
+        let client = AsyncClient::new(
+            client_config.clone(),
+            onc_rpc_runtime::TokioAsyncUdpClientTransport::connect(&client_config)
+                .await
+                .expect("client transport should connect"),
+        );
+        client
+            .call(onc_rpc_runtime::CallRequest::new(
+                program,
+                Procedure(1),
+                bytes::Bytes::from_static(b"ping"),
+            ))
             .await
-            .expect("unpublish should succeed");
+            .expect("request should succeed");
+
+        serve_task
+            .await
+            .expect("serve task should join")
+            .expect("auto-published accept should succeed");
         assert!(matches!(
-            resolver
-                .lookup_udp_addr(ProgramVersion {
-                    program: published.number,
-                    version: published.version,
-                })
-                .await,
+            resolver.lookup_udp_addr(program).await,
             Err(BindError::NotFound { .. })
         ));
 
         rpcbind_task.abort();
+    }
+
+    #[test]
+    fn resolve_client_config_prefers_configured_service_name_builder() {
+        let config = ClientConfig::new("127.0.0.1:2049".parse().expect("valid addr"))
+            .with_service_name("dme-service");
+        assert_eq!(config.service_name.as_deref(), Some("dme-service"));
     }
 }

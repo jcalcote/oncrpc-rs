@@ -73,6 +73,11 @@ impl ClientConfig {
         self
     }
 
+    pub fn with_service_name(mut self, service_name: impl Into<String>) -> Self {
+        self.service_name = Some(service_name.into());
+        self
+    }
+
     pub fn with_credentials(mut self, credentials: OpaqueAuth) -> Self {
         self.credentials = credentials;
         self

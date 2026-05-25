@@ -9,7 +9,7 @@ rust-version.workspace = true
 authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Optional rpcbind / portmap support for ONC RPC."
+description = "Optional rpcbind v4 support for ONC RPC."
 
 [dependencies]
 async-trait.workspace = true

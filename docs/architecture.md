@@ -158,7 +158,7 @@ practice that means:
 - selector and worker usage should allow many requests and replies to progress
   concurrently rather than funneling all work through a single execution lane
 - generated dispatch glue must remain compatible with highly concurrent caller
-  behavior in real Hammerspace components
+  behavior in real consumer components
 - server-side concurrency and runtime sizing knobs should be surfaced through
   explicit builder/configuration APIs rather than hard-coded transport choices
 
@@ -193,7 +193,7 @@ encoding in `onc-rpc-wire`.
 
 ### `onc-rpc-bind`
 
-Owns optional `rpcbind` / portmap support. It is intentionally outside the core
+Owns optional `rpcbind` v4 support. It is intentionally outside the core
 runtime path because current consumers can operate with fixed ports or
 control-plane supplied port information. It should cover both TCP and UDP
 mapping flows without forcing discovery policy into the core runtime APIs.

@@ -4,20 +4,27 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use tempfile::TempDir;
 
-fn datasphere_xdr_dir() -> PathBuf {
-    Path::new("/home/jcalcote/dev/git/datasphere/pd-shared-api/xdr").to_path_buf()
+fn datasphere_xdr_dir() -> Option<PathBuf> {
+    if let Some(configured) = std::env::var_os("ONC_RPCGEN_REAL_XDR_DIR") {
+        let path = PathBuf::from(configured);
+        assert!(
+            path.is_dir(),
+            "ONC_RPCGEN_REAL_XDR_DIR does not point to a readable directory: {}",
+            path.display()
+        );
+        return Some(path);
+    }
+    None
 }
 
 #[test]
 fn datasphere_corpus_generates_and_compiles_when_available() {
-    let xdr_dir = datasphere_xdr_dir();
-    if !xdr_dir.is_dir() {
+    let Some(xdr_dir) = datasphere_xdr_dir() else {
         eprintln!(
-            "skipping datasphere corpus test; {} not present",
-            xdr_dir.display()
+            "skipping real corpus test; set ONC_RPCGEN_REAL_XDR_DIR to a readable .x corpus directory"
         );
         return;
-    }
+    };
 
     let out = TempDir::new().expect("tempdir should exist");
     let out_dir = out.path().join("generated");

@@ -23,7 +23,7 @@ Non-goals for the initial implementation:
 - full `oncrpc4j` parity on day one
 - broad framework integration layers
 - every historical ONC RPC transport or auth mode
-- mandatory `rpcbind` / portmap support for consumers that already use fixed ports or control-plane discovery
+- mandatory `rpcbind` support for consumers that already use fixed ports or control-plane discovery
 
 ## Why `onc-rpcgen` Is Core
 
@@ -46,7 +46,7 @@ That makes `onc-rpcgen` a required crate in the workspace, not an optional futur
 - `crates/onc-rpc-tls`: TLS and STARTTLS integration points
 - `crates/onc-rpc-xdr`: shared XDR encode/decode traits and helpers for generated code
 - `crates/onc-rpcgen`: core code generator for XDR types plus ONC RPC client/server stubs
-- `crates/onc-rpc-bind`: optional `rpcbind` / portmap support
+- `crates/onc-rpc-bind`: optional `rpcbind` v4 support
 
 ## Current Status
 
@@ -60,8 +60,8 @@ The workspace now includes:
 - per-file `.x` module generation with include-aware loading
 - typed synchronous and asynchronous client/server stub generation
 - request-level call options with per-call timeout and auth override support
-- optional synchronous and asynchronous `rpcbind` lookup/register/unregister
-  support for TCP/TCP6 and UDP/UDP6 mappings
+- optional synchronous and asynchronous `rpcbind` v4
+  lookup/register/unregister support for TCP/TCP6 and UDP/UDP6 mappings
 - optional direct TLS and STARTTLS client/server transports on top of the
   existing Tokio TCP path
 - a working `oncrpcgen` CLI that can generate usable output from real `.x` inputs

@@ -40,6 +40,7 @@ impl From<ProgramVersion> for Program {
 pub struct ServerConfig {
     pub bind_addr: SocketAddr,
     pub auto_publish: bool,
+    pub rpcbind_addr: Option<SocketAddr>,
     pub service_name: Option<String>,
     pub selector_threads: usize,
     pub worker_threads: usize,
@@ -50,6 +51,7 @@ impl Default for ServerConfig {
         Self {
             bind_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
             auto_publish: false,
+            rpcbind_addr: None,
             service_name: None,
             selector_threads: 1,
             worker_threads: 1,
@@ -147,6 +149,11 @@ impl ServerBuilder {
 
     pub fn with_auto_publish(mut self, enabled: bool) -> Self {
         self.config.auto_publish = enabled;
+        self
+    }
+
+    pub fn with_rpcbind_addr(mut self, rpcbind_addr: SocketAddr) -> Self {
+        self.config.rpcbind_addr = Some(rpcbind_addr);
         self
     }
 
