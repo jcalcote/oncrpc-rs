@@ -12,5 +12,16 @@ categories.workspace = true
 description = "TLS and STARTTLS integration points for ONC RPC."
 
 [dependencies]
+async-trait.workspace = true
+bytes.workspace = true
+rustls.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
+tokio-rustls.workspace = true
+onc-rpc-runtime = { path = "../onc-rpc-runtime" }
+onc-rpc-server = { path = "../onc-rpc-server" }
+onc-rpc-wire = { path = "../onc-rpc-wire" }
 
+[dev-dependencies]
+onc-rpc-xdr = { path = "../onc-rpc-xdr" }
+rcgen.workspace = true

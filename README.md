@@ -57,6 +57,8 @@ The workspace now includes:
 - request-level call options with per-call timeout override support
 - optional synchronous and asynchronous `rpcbind` lookup/register/unregister
   support
+- optional direct TLS and STARTTLS client/server transports on top of the
+  existing Tokio TCP path
 - a working `oncrpcgen` CLI that can generate usable output from real `.x` inputs
 
 The main remaining implementation work is in transport depth, interoperability,
@@ -138,6 +140,31 @@ When a specific call needs different timeout behavior than the client default,
 generated client stubs also expose `_with_options(...)` variants that take
 `onc_rpc_runtime::CallOptions`.
 
+## TLS and STARTTLS
+
+The workspace now includes optional TLS support in
+[`crates/onc-rpc-tls/`](crates/onc-rpc-tls).
+
+What is supported:
+
+- direct TLS client transports for sync and async runtime clients
+- direct TLS server transports for sync and async dispatch paths
+- STARTTLS upgrade transports that follow the RFC 9289 `AUTH_TLS` probe flow
+  on the same TCP connection
+- ALPN `sunrpc` negotiation on both client and server TLS configs
+- fixed-port TCP operation remains unchanged when TLS is not selected
+
+At a high level:
+
+- use the existing `onc-rpc-runtime` and `onc-rpc-server` client/server types
+- swap in TLS or STARTTLS transport types from `onc-rpc-tls`
+- provide Rustls client/server configuration through
+  `ClientTlsConfig` / `ServerTlsConfig`
+
+STARTTLS support is explicit rather than automatic. Consumers choose the
+STARTTLS transport when they want the RFC 9289 probe-and-upgrade flow on a
+standard RPC TCP port.
+
 ## Third-Party Dependencies
 
 Current Rust dependencies are intentionally small:
@@ -172,5 +199,5 @@ cargo check --workspace
   load
 - add per-call auth options to the generated/runtime API surface
 - improve `oncrpcgen` CLI help and consumer integration ergonomics
-- add RPC-over-TLS support
+- broaden TLS interoperability and policy coverage
 - broaden examples and generated-code polish for downstream consumers
