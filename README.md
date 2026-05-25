@@ -10,7 +10,9 @@ without trying to reproduce every feature of older Java or C ecosystems up front
 Current goals:
 
 - TCP client/runtime support
+- UDP client/runtime support
 - TCP server/runtime support
+- UDP server/runtime support
 - `AUTH_NONE` and `AUTH_SYS`
 - generated Rust types, client stubs, and server stubs from `.x` definitions
 - additive synchronous and asynchronous client/server generation
@@ -51,13 +53,15 @@ That makes `onc-rpcgen` a required crate in the workspace, not an optional futur
 The workspace now includes:
 
 - owned ONC RPC wire types and TCP record-marking support
+- synchronous and asynchronous UDP client/server transports alongside the TCP
+  path
 - `AUTH_NONE` and `AUTH_SYS` helpers plus server-side auth decoding support
 - generated Rust XDR types with `XdrEncode` / `XdrDecode` impls
 - per-file `.x` module generation with include-aware loading
 - typed synchronous and asynchronous client/server stub generation
 - request-level call options with per-call timeout and auth override support
 - optional synchronous and asynchronous `rpcbind` lookup/register/unregister
-  support
+  support for TCP/TCP6 and UDP/UDP6 mappings
 - optional direct TLS and STARTTLS client/server transports on top of the
   existing Tokio TCP path
 - a working `oncrpcgen` CLI that can generate usable output from real `.x` inputs
@@ -168,6 +172,9 @@ At a high level:
 STARTTLS support is explicit rather than automatic. Consumers choose the
 STARTTLS transport when they want the RFC 9289 probe-and-upgrade flow on a
 standard RPC TCP port.
+
+This TLS support currently applies to the TCP transport path. DTLS is not part
+of the current implementation.
 
 ## Third-Party Dependencies
 

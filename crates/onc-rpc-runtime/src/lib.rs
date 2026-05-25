@@ -17,7 +17,10 @@ use std::time::Duration;
 use thiserror::Error;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
-pub use transport::{TokioAsyncClientTransport, TokioClientTransport};
+pub use transport::{
+    TokioAsyncClientTransport, TokioAsyncUdpClientTransport, TokioClientTransport,
+    TokioUdpClientTransport,
+};
 
 #[derive(Debug, Clone)]
 pub struct ClientConfig {
@@ -480,6 +483,14 @@ where
 {
     let payload = message.encode().map_err(RuntimeError::Wire)?;
     write_record_payload(writer, &payload).await
+}
+
+pub fn encode_rpc_message_datagram(message: &RpcMessage) -> Result<Bytes, RuntimeError> {
+    message.encode().map_err(RuntimeError::Wire)
+}
+
+pub fn decode_rpc_message_datagram(datagram: &[u8]) -> Result<RpcMessage, RuntimeError> {
+    RpcMessage::decode(datagram).map_err(RuntimeError::Wire)
 }
 
 fn try_take_record_from_buffer(buffer: &mut BytesMut) -> Result<Option<Bytes>, RuntimeError> {

@@ -9,7 +9,7 @@ program/version/procedure interfaces.
 The project is intentionally shaped around that full requirement:
 
 - owned ONC RPC wire-format support
-- TCP-first client and server runtime support
+- TCP and UDP client and server runtime support
 - `AUTH_NONE` and `AUTH_SYS`
 - code generation from `.x` files into Rust types and client/server stubs
 
@@ -73,7 +73,7 @@ validation, and helper APIs belong here.
 
 Owns client-side transport/runtime behavior:
 
-- TCP connection setup
+- TCP and UDP socket setup
 - local bind support
 - connect timeouts
 - default per-call timeout and write timeout policy
@@ -82,11 +82,15 @@ Owns client-side transport/runtime behavior:
 - client-default and per-call auth selection for `AUTH_NONE` and `AUTH_SYS`
 - request/reply correlation
 - TCP record framing and reassembly
+- UDP datagram encode/decode and retry semantics
 - synchronous and asynchronous client call handling
 - concurrent in-flight request handling on shared client connections
 
-This crate should be TCP-first. Optional discovery layers such as `rpcbind`
-must not shape the core runtime abstractions.
+This crate should preserve clear transport semantics. TCP and UDP should share
+the public client contract where practical, but UDP must remain a deliberate
+datagram transport rather than inheriting TCP record-framing assumptions.
+Optional discovery layers such as `rpcbind` must not shape the core runtime
+abstractions.
 
 Runtime transport should prefer zero-copy or minimal-copy buffer handling where
 the protocol shape allows it. In practice that means:
@@ -124,7 +128,7 @@ requirements. In practice that means:
 
 Owns server-side runtime behavior:
 
-- listener setup
+- TCP listener and UDP socket setup
 - service registration
 - program/version dispatch
 - lifecycle management
@@ -181,7 +185,8 @@ encoding in `onc-rpc-wire`.
 
 Owns optional `rpcbind` / portmap support. It is intentionally outside the core
 runtime path because current consumers can operate with fixed ports or
-control-plane supplied port information.
+control-plane supplied port information. It should cover both TCP and UDP
+mapping flows without forcing discovery policy into the core runtime APIs.
 
 ## IDL Contract
 

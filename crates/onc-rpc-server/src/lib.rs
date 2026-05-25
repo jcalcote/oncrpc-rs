@@ -13,7 +13,10 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use thiserror::Error;
 
-pub use transport::{ServerTransportError, TokioAsyncServerTransport, TokioServerTransport};
+pub use transport::{
+    ServerTransportError, TokioAsyncServerTransport, TokioAsyncUdpServerTransport,
+    TokioServerTransport, TokioUdpServerTransport,
+};
 
 type DispatchResolution = (Xid, RequestContext, Option<Arc<dyn Dispatch>>);
 type AsyncDispatchResolution = (Xid, RequestContext, Option<Arc<dyn AsyncDispatch>>);

@@ -9,7 +9,7 @@ rust-version.workspace = true
 authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "TCP runtime primitives for ONC RPC clients."
+description = "TCP and UDP runtime primitives for ONC RPC clients."
 
 [dependencies]
 async-trait.workspace = true
