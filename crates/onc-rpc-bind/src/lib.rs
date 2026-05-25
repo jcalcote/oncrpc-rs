@@ -26,6 +26,25 @@ pub const RPCBIND_GETADDR: Procedure = Procedure(3);
 
 const DEFAULT_OWNER: &str = "oncrpc-rs";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RpcTransport {
+    Tcp,
+    Tcp6,
+    Udp,
+    Udp6,
+}
+
+impl RpcTransport {
+    pub fn netid(self) -> &'static str {
+        match self {
+            Self::Tcp => "tcp",
+            Self::Tcp6 => "tcp6",
+            Self::Udp => "udp",
+            Self::Udp6 => "udp6",
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum BindError {
     #[error("runtime failure: {0}")]
@@ -141,6 +160,18 @@ pub fn lookup_port(rpcbind_addr: SocketAddr, program: u32, version: u32) -> Resu
         .port())
 }
 
+pub fn lookup_port_for_transport(
+    rpcbind_addr: SocketAddr,
+    program: u32,
+    version: u32,
+    transport: RpcTransport,
+) -> Result<u16, BindError> {
+    let client = RpcbindClient::connect(rpcbind_addr)?;
+    Ok(client
+        .lookup_addr_for_transport(ProgramVersion { program, version }, transport)?
+        .port())
+}
+
 pub async fn lookup_port_async(
     rpcbind_addr: SocketAddr,
     program: u32,
@@ -149,6 +180,19 @@ pub async fn lookup_port_async(
     let client = AsyncRpcbindClient::connect(rpcbind_addr).await?;
     Ok(client
         .lookup_tcp_addr(ProgramVersion { program, version })
+        .await?
+        .port())
+}
+
+pub async fn lookup_port_async_for_transport(
+    rpcbind_addr: SocketAddr,
+    program: u32,
+    version: u32,
+    transport: RpcTransport,
+) -> Result<u16, BindError> {
+    let client = AsyncRpcbindClient::connect(rpcbind_addr).await?;
+    Ok(client
+        .lookup_addr_for_transport(ProgramVersion { program, version }, transport)
         .await?
         .port())
 }
@@ -194,6 +238,26 @@ pub async fn resolve_client_config_async(
     Ok(ClientConfig::new(service_addr))
 }
 
+pub fn resolve_client_config_for_transport(
+    rpcbind_addr: SocketAddr,
+    program: ProgramVersion,
+    transport: RpcTransport,
+) -> Result<ClientConfig, BindError> {
+    let client = RpcbindClient::connect(rpcbind_addr)?;
+    let service_addr = client.lookup_addr_for_transport(program, transport)?;
+    Ok(ClientConfig::new(service_addr))
+}
+
+pub async fn resolve_client_config_async_for_transport(
+    rpcbind_addr: SocketAddr,
+    program: ProgramVersion,
+    transport: RpcTransport,
+) -> Result<ClientConfig, BindError> {
+    let client = AsyncRpcbindClient::connect(rpcbind_addr).await?;
+    let service_addr = client.lookup_addr_for_transport(program, transport).await?;
+    Ok(ClientConfig::new(service_addr))
+}
+
 pub fn resolve_udp_client_config(
     rpcbind_addr: SocketAddr,
     program: ProgramVersion,
@@ -233,7 +297,22 @@ impl RpcbindClient {
     }
 
     pub fn lookup_udp_addr(&self, program: ProgramVersion) -> Result<SocketAddr, BindError> {
-        self.lookup_addr(program, udp_netid(self.client.config().remote_addr))
+        self.lookup_addr(
+            program,
+            match self.netid {
+                "tcp" | "udp" => RpcTransport::Udp.netid(),
+                "tcp6" | "udp6" => RpcTransport::Udp6.netid(),
+                _ => RpcTransport::Udp.netid(),
+            },
+        )
+    }
+
+    pub fn lookup_addr_for_transport(
+        &self,
+        program: ProgramVersion,
+        transport: RpcTransport,
+    ) -> Result<SocketAddr, BindError> {
+        self.lookup_addr(program, transport.netid())
     }
 
     fn lookup_addr(
@@ -334,8 +413,23 @@ impl AsyncRpcbindClient {
     }
 
     pub async fn lookup_udp_addr(&self, program: ProgramVersion) -> Result<SocketAddr, BindError> {
-        self.lookup_addr(program, udp_netid(self.client.config().remote_addr))
-            .await
+        self.lookup_addr(
+            program,
+            match self.netid {
+                "tcp" | "udp" => RpcTransport::Udp.netid(),
+                "tcp6" | "udp6" => RpcTransport::Udp6.netid(),
+                _ => RpcTransport::Udp.netid(),
+            },
+        )
+        .await
+    }
+
+    pub async fn lookup_addr_for_transport(
+        &self,
+        program: ProgramVersion,
+        transport: RpcTransport,
+    ) -> Result<SocketAddr, BindError> {
+        self.lookup_addr(program, transport.netid()).await
     }
 
     async fn lookup_addr(
@@ -987,6 +1081,106 @@ mod tests {
             client.lookup_udp_addr(service).await,
             Err(BindError::NotFound { .. })
         ));
+
+        task.abort();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn async_client_can_lookup_ipv6_service_via_ipv4_rpcbind_with_explicit_transport() {
+        let state = RpcbindState::default();
+        let mut server = ServerBuilder::new()
+            .with_bind_addr(loopback())
+            .build_async();
+        server
+            .register(
+                Program {
+                    number: RPCBIND_PROGRAM.program,
+                    version: RPCBIND_PROGRAM.version,
+                },
+                AsyncRpcbindDispatch {
+                    state: state.clone(),
+                },
+            )
+            .expect("registration should succeed");
+        let transport = TokioAsyncServerTransport::bind(server)
+            .await
+            .expect("rpcbind should bind");
+        let addr = transport.local_addr().expect("local addr");
+        let task = tokio::spawn(async move {
+            let _ = transport.serve().await;
+        });
+
+        let client = AsyncRpcbindClient::connect(addr)
+            .await
+            .expect("connect should succeed");
+        let tcp6_service = ProgramVersion {
+            program: 200_021,
+            version: 1,
+        };
+        let tcp6_addr: SocketAddr = "[::1]:4040".parse().expect("valid ipv6 tcp addr");
+        let udp6_service = ProgramVersion {
+            program: 200_022,
+            version: 1,
+        };
+        let udp6_addr: SocketAddr = "[::1]:5050".parse().expect("valid ipv6 udp addr");
+
+        assert!(
+            client
+                .register_tcp(tcp6_addr, tcp6_service, "owner")
+                .await
+                .expect("tcp6 register should succeed")
+        );
+        assert!(
+            client
+                .register_udp(udp6_addr, udp6_service, "owner")
+                .await
+                .expect("udp6 register should succeed")
+        );
+
+        assert_eq!(
+            client
+                .lookup_addr_for_transport(tcp6_service, RpcTransport::Tcp6)
+                .await
+                .expect("tcp6 lookup should succeed"),
+            tcp6_addr
+        );
+        assert_eq!(
+            lookup_port_async_for_transport(
+                addr,
+                tcp6_service.program,
+                tcp6_service.version,
+                RpcTransport::Tcp6,
+            )
+            .await
+            .expect("tcp6 port lookup should succeed"),
+            tcp6_addr.port()
+        );
+        assert_eq!(
+            resolve_client_config_async_for_transport(addr, tcp6_service, RpcTransport::Tcp6)
+                .await
+                .expect("tcp6 config resolution should succeed")
+                .remote_addr,
+            tcp6_addr
+        );
+
+        assert_eq!(
+            client
+                .lookup_addr_for_transport(udp6_service, RpcTransport::Udp6)
+                .await
+                .expect("udp6 lookup should succeed"),
+            udp6_addr
+        );
+        assert_eq!(
+            lookup_port_async_for_transport(
+                addr,
+                udp6_service.program,
+                udp6_service.version,
+                RpcTransport::Udp6,
+            )
+            .await
+            .expect("udp6 port lookup should succeed"),
+            udp6_addr.port()
+        );
 
         task.abort();
     }

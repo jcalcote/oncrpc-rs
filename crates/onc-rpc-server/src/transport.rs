@@ -254,15 +254,15 @@ impl TokioUdpServerTransport {
 
     pub async fn serve(self) -> Result<(), ServerTransportError> {
         loop {
+            let permit = acquire_worker_permit(self.worker_limit.clone()).await?;
             let (peer, datagram) = recv_udp_datagram(self.socket.clone()).await?;
             let socket = self.socket.clone();
             let server = self.server.clone();
             let runtime_guard = self.runtime_guard.clone();
-            let worker_limit = self.worker_limit.clone();
             self.runtime_handle.spawn(async move {
                 let _runtime_guard = runtime_guard;
-                let _ =
-                    handle_sync_udp_datagram(socket, server, worker_limit, peer, datagram).await;
+                let _permit = permit;
+                let _ = handle_sync_udp_datagram(socket, server, peer, datagram).await;
             });
         }
     }
@@ -326,15 +326,15 @@ impl TokioAsyncUdpServerTransport {
 
     pub async fn serve(self) -> Result<(), ServerTransportError> {
         loop {
+            let permit = acquire_worker_permit(self.worker_limit.clone()).await?;
             let (peer, datagram) = recv_udp_datagram(self.socket.clone()).await?;
             let socket = self.socket.clone();
             let server = self.server.clone();
             let runtime_guard = self.runtime_guard.clone();
-            let worker_limit = self.worker_limit.clone();
             self.runtime_handle.spawn(async move {
                 let _runtime_guard = runtime_guard;
-                let _ =
-                    handle_async_udp_datagram(socket, server, worker_limit, peer, datagram).await;
+                let _permit = permit;
+                let _ = handle_async_udp_datagram(socket, server, peer, datagram).await;
             });
         }
     }
@@ -434,12 +434,9 @@ async fn recv_udp_datagram(
 async fn handle_sync_udp_datagram(
     socket: Arc<UdpSocket>,
     server: Arc<Server>,
-    worker_limit: Arc<Semaphore>,
     peer: std::net::SocketAddr,
     datagram: Bytes,
 ) -> Result<(), ServerTransportError> {
-    let permit = acquire_worker_permit(worker_limit).await?;
-    let _permit = permit;
     let message = decode_rpc_message_datagram(&datagram).map_err(map_runtime_error)?;
     let reply = server.handle_message(message)?;
     let payload = encode_rpc_message_datagram(&reply)?;
@@ -453,12 +450,9 @@ async fn handle_sync_udp_datagram(
 async fn handle_async_udp_datagram(
     socket: Arc<UdpSocket>,
     server: Arc<AsyncServer>,
-    worker_limit: Arc<Semaphore>,
     peer: std::net::SocketAddr,
     datagram: Bytes,
 ) -> Result<(), ServerTransportError> {
-    let permit = acquire_worker_permit(worker_limit).await?;
-    let _permit = permit;
     let message = decode_rpc_message_datagram(&datagram).map_err(map_runtime_error)?;
     let reply = server.handle_message(message).await?;
     let payload = encode_rpc_message_datagram(&reply)?;
@@ -517,11 +511,12 @@ async fn run_sync_udp_datagram_on_runtime(
     peer: std::net::SocketAddr,
     datagram: Bytes,
 ) -> Result<(), ServerTransportError> {
+    let permit = acquire_worker_permit(worker_limit).await?;
     let (tx, rx) = oneshot::channel();
     runtime_handle.spawn(async move {
         let _runtime_guard = runtime_guard;
-        let _ =
-            tx.send(handle_sync_udp_datagram(socket, server, worker_limit, peer, datagram).await);
+        let _permit = permit;
+        let _ = tx.send(handle_sync_udp_datagram(socket, server, peer, datagram).await);
     });
     rx.await
         .map_err(|_| ServerTransportError::Io("server runtime terminated".into()))?
@@ -536,11 +531,12 @@ async fn run_async_udp_datagram_on_runtime(
     peer: std::net::SocketAddr,
     datagram: Bytes,
 ) -> Result<(), ServerTransportError> {
+    let permit = acquire_worker_permit(worker_limit).await?;
     let (tx, rx) = oneshot::channel();
     runtime_handle.spawn(async move {
         let _runtime_guard = runtime_guard;
-        let _ =
-            tx.send(handle_async_udp_datagram(socket, server, worker_limit, peer, datagram).await);
+        let _permit = permit;
+        let _ = tx.send(handle_async_udp_datagram(socket, server, peer, datagram).await);
     });
     rx.await
         .map_err(|_| ServerTransportError::Io("server runtime terminated".into()))?

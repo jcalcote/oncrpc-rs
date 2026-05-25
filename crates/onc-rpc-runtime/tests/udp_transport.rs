@@ -98,7 +98,7 @@ async fn async_udp_transport_correlates_concurrent_requests_by_xid() {
 }
 
 #[tokio::test]
-async fn async_udp_transport_retries_until_reply_arrives() {
+async fn async_udp_transport_waits_for_late_reply_without_resend() {
     let socket = UdpSocket::bind("127.0.0.1:0")
         .await
         .expect("socket should bind");
@@ -107,23 +107,18 @@ async fn async_udp_transport_retries_until_reply_arrives() {
     let server = tokio::spawn(async move {
         let mut buffer = vec![0_u8; 4096];
 
-        let (first_len, _) = socket
+        let (read_len, peer) = socket
             .recv_from(&mut buffer)
             .await
-            .expect("first recv should succeed");
-        let first = decode_rpc_message_datagram(&buffer[..first_len]).expect("first decode");
+            .expect("recv should succeed");
+        let request = decode_rpc_message_datagram(&buffer[..read_len]).expect("decode");
 
-        let (second_len, second_peer) = socket
-            .recv_from(&mut buffer)
-            .await
-            .expect("second recv should succeed");
-        let second = decode_rpc_message_datagram(&buffer[..second_len]).expect("second decode");
-        assert_eq!(second.xid, first.xid);
+        tokio::time::sleep(Duration::from_millis(200)).await;
 
-        let encoded = encode_rpc_message_datagram(&reply(second.xid, request_payload(&second)))
+        let encoded = encode_rpc_message_datagram(&reply(request.xid, request_payload(&request)))
             .expect("reply should encode");
         socket
-            .send_to(&encoded, second_peer)
+            .send_to(&encoded, peer)
             .await
             .expect("reply should send");
     });
@@ -143,12 +138,12 @@ async fn async_udp_transport_retries_until_reply_arrives() {
                 version: 3,
             },
             Procedure(1),
-            Bytes::from_static(b"retry-me"),
+            Bytes::from_static(b"wait-for-me"),
         ))
         .await
-        .expect("call should succeed after retry");
+        .expect("call should succeed without resend");
 
-    assert_eq!(response.payload, Bytes::from_static(b"retry-me"));
+    assert_eq!(response.payload, Bytes::from_static(b"wait-for-me"));
     server.await.expect("server task should complete");
 }
 
@@ -289,10 +284,6 @@ async fn async_udp_transport_times_out_when_no_reply_arrives() {
             .recv_from(&mut buffer)
             .await
             .expect("recv should succeed");
-        let _ = socket
-            .recv_from(&mut buffer)
-            .await
-            .expect("retry recv should succeed");
     });
 
     let config = ClientConfig::new(addr)
@@ -316,4 +307,81 @@ async fn async_udp_transport_times_out_when_no_reply_arrives() {
         .expect_err("call should time out");
 
     assert!(matches!(error, RuntimeError::Transport(message) if message.contains("call timeout")));
+}
+
+#[tokio::test]
+async fn async_udp_transport_drops_malformed_datagrams_and_stays_usable() {
+    let socket = UdpSocket::bind("127.0.0.1:0")
+        .await
+        .expect("socket should bind");
+    let addr = socket.local_addr().expect("local addr");
+
+    let server = tokio::spawn(async move {
+        let mut buffer = vec![0_u8; 4096];
+
+        let (len, peer) = socket
+            .recv_from(&mut buffer)
+            .await
+            .expect("first recv should succeed");
+        let first = decode_rpc_message_datagram(&buffer[..len]).expect("first decode");
+        socket
+            .send_to(&[0xde, 0xad, 0xbe], peer)
+            .await
+            .expect("malformed datagram should send");
+
+        let (len, peer) = socket
+            .recv_from(&mut buffer)
+            .await
+            .expect("second recv should succeed");
+        let second = decode_rpc_message_datagram(&buffer[..len]).expect("second decode");
+        let encoded = encode_rpc_message_datagram(&reply(second.xid, request_payload(&second)))
+            .expect("reply encode should succeed");
+        socket
+            .send_to(&encoded, peer)
+            .await
+            .expect("reply should send");
+
+        let encoded = encode_rpc_message_datagram(&reply(first.xid, request_payload(&first)))
+            .expect("late reply encode should succeed");
+        socket
+            .send_to(&encoded, peer)
+            .await
+            .expect("late reply should send");
+    });
+
+    let config = ClientConfig::new(addr)
+        .with_connect_timeout(Duration::from_secs(5))
+        .with_default_call_timeout(Duration::from_millis(250));
+    let transport = TokioAsyncUdpClientTransport::connect(&config)
+        .await
+        .expect("client should connect");
+    let client = AsyncClient::new(config, transport);
+
+    let error = client
+        .call_typed::<u32, u32>(
+            ProgramVersion {
+                program: 100_003,
+                version: 3,
+            },
+            Procedure(1),
+            &1_u32,
+        )
+        .await
+        .expect_err("first call should time out");
+    assert!(matches!(error, RuntimeError::Transport(message) if message.contains("call timeout")));
+
+    let reply: u32 = client
+        .call_typed(
+            ProgramVersion {
+                program: 100_003,
+                version: 3,
+            },
+            Procedure(1),
+            &2_u32,
+        )
+        .await
+        .expect("second call should still succeed");
+    assert_eq!(reply, 2);
+
+    server.await.expect("server task should complete");
 }

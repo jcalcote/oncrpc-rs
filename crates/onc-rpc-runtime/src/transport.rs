@@ -11,10 +11,9 @@ use std::sync::{Arc, Mutex as StdMutex, mpsc};
 use tokio::io::AsyncReadExt;
 use tokio::net::{TcpSocket, TcpStream, UdpSocket, tcp::OwnedReadHalf, tcp::OwnedWriteHalf};
 use tokio::sync::{Mutex, oneshot};
-use tokio::time::{Instant, sleep, timeout};
+use tokio::time::timeout;
 
 type PendingMap = Arc<Mutex<HashMap<Xid, oneshot::Sender<Result<RpcMessage, RuntimeError>>>>>;
-const UDP_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
 
 #[derive(Clone)]
 pub struct TokioAsyncClientTransport {
@@ -123,59 +122,6 @@ impl TokioAsyncUdpClientTransport {
             default_call_timeout,
             write_timeout,
         })
-    }
-
-    async fn await_reply(
-        &self,
-        xid: Xid,
-        rx: oneshot::Receiver<Result<RpcMessage, RuntimeError>>,
-        payload: &bytes::Bytes,
-        options: &CallOptions,
-    ) -> Result<RpcMessage, RuntimeError> {
-        let timeout_duration = options.effective_timeout(self.default_call_timeout);
-        let mut rx = rx;
-
-        match timeout_duration {
-            None => match rx.await {
-                Ok(result) => result,
-                Err(_) => Err(RuntimeError::ConnectionClosed),
-            },
-            Some(total_timeout) => {
-                let deadline = Instant::now() + total_timeout;
-                loop {
-                    let now = Instant::now();
-                    if now >= deadline {
-                        self.pending.lock().await.remove(&xid);
-                        return Err(RuntimeError::Transport(format!(
-                            "call timeout after {:?}",
-                            total_timeout
-                        )));
-                    }
-
-                    let remaining = deadline.saturating_duration_since(now);
-                    let wait = remaining.min(UDP_RETRY_INTERVAL);
-
-                    tokio::select! {
-                        reply_result = &mut rx => {
-                            return match reply_result {
-                                Ok(result) => result,
-                                Err(_) => Err(RuntimeError::ConnectionClosed),
-                            };
-                        }
-                        _ = sleep(wait) => {
-                            if Instant::now() >= deadline {
-                                self.pending.lock().await.remove(&xid);
-                                return Err(RuntimeError::Transport(format!(
-                                    "call timeout after {:?}",
-                                    total_timeout
-                                )));
-                            }
-                            send_udp_request(&self.socket, payload, self.write_timeout).await?;
-                        }
-                    }
-                }
-            }
-        }
     }
 }
 
@@ -296,7 +242,7 @@ impl AsyncClientTransport for TokioAsyncUdpClientTransport {
             return Err(error);
         }
 
-        self.await_reply(xid, rx, &payload, options).await
+        await_reply(&self.pending, xid, rx, options, self.default_call_timeout).await
     }
 }
 
@@ -445,7 +391,11 @@ async fn udp_reader_loop(socket: Arc<UdpSocket>, pending: PendingMap) -> Result<
             continue;
         }
 
-        let message = decode_rpc_message_datagram(&buffer[..read])?;
+        let message = match decode_rpc_message_datagram(&buffer[..read]) {
+            Ok(message) => message,
+            Err(RuntimeError::Wire(_)) => continue,
+            Err(error) => return Err(error),
+        };
         let xid = message.xid;
         if let Some(sender) = pending.lock().await.remove(&xid) {
             let _ = sender.send(Ok(message));

@@ -82,7 +82,7 @@ Owns client-side transport/runtime behavior:
 - client-default and per-call auth selection for `AUTH_NONE` and `AUTH_SYS`
 - request/reply correlation
 - TCP record framing and reassembly
-- UDP datagram encode/decode and retry semantics
+- UDP datagram encode/decode semantics
 - synchronous and asynchronous client call handling
 - concurrent in-flight request handling on shared client connections
 
@@ -91,6 +91,16 @@ the public client contract where practical, but UDP must remain a deliberate
 datagram transport rather than inheriting TCP record-framing assumptions.
 Optional discovery layers such as `rpcbind` must not shape the core runtime
 abstractions.
+
+UDP transport should also avoid embedding hidden retransmission policy into the
+core runtime. In practice that means:
+
+- a UDP client call should send one datagram and wait for a reply until its
+  timeout expires
+- retransmission, if ever desired, should be an explicit caller policy rather
+  than an implicit transport behavior
+- timeouts over UDP must therefore be understood as "no reply arrived in time",
+  not as proof that the remote procedure did not execute
 
 Runtime transport should prefer zero-copy or minimal-copy buffer handling where
 the protocol shape allows it. In practice that means:
