@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`onc-rpcgen` is responsible for turning `.x` inputs into:
+`onc-rpc-gen` is responsible for turning `.x` inputs into:
 
 - Rust XDR payload types
 - Rust XDR serialization and deserialization implementations

@@ -148,7 +148,7 @@ Owns server-side runtime behavior:
 - transport runtime sizing and worker concurrency controls
 
 Server registration should center on explicit `{program, version}` ownership and
-generated dispatch glue from `onc-rpcgen`.
+generated dispatch glue from `onc-rpc-gen`.
 
 Server transport should treat concurrency as a first-class requirement. In
 practice that means:
@@ -167,7 +167,7 @@ practice that means:
 Owns optional TLS and STARTTLS integration points. This crate should wrap the
 runtime layer rather than redefine it.
 
-### `onc-rpcgen`
+### `onc-rpc-gen`
 
 Owns `.x`-driven generation for both halves of the protocol:
 
@@ -202,7 +202,7 @@ mapping flows without forcing discovery policy into the core runtime APIs.
 
 The working assumption is that `.x` files remain the source of truth.
 
-That means `onc-rpcgen` must eventually own:
+That means `onc-rpc-gen` must eventually own:
 
 - parsing of XDR and ONC RPC declarations
 - cross-file reference resolution
@@ -367,7 +367,7 @@ The project should maintain at least three layers of tests:
 3. interoperability tests against external ONC RPC implementations
 
 The real `.x` files used by consumers should become first-class fixtures for
-`onc-rpcgen`.
+`onc-rpc-gen`.
 
 The canonical fixture layout lives under `tests/fixtures/`, with separate
 spaces for real inputs, synthetic focused inputs, and expected outputs.

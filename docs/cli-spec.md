@@ -3,7 +3,7 @@
 ## Purpose
 
 This document specifies the intended command-line interface and library-facing
-generation contract for `onc-rpcgen`.
+generation contract for `onc-rpc-gen`.
 
 It exists to document the completed synchronous and asynchronous generation
 contract for:
@@ -18,7 +18,7 @@ The intent is to keep the Rust design aligned with the feature intent of
 
 ## Scope
 
-This specification covers the current `onc-rpcgen` implementation:
+This specification covers the current `onc-rpc-gen` implementation:
 
 - `oncrpcgen` command structure
 - generator library entry points
@@ -34,7 +34,7 @@ This specification does not yet define:
 - TLS-specific generation behavior
 
 It also records the additive async contract now implemented by
-`onc-rpc-runtime`, `onc-rpc-server`, and `onc-rpcgen`.
+`onc-rpc-runtime`, `onc-rpc-server`, and `onc-rpc-gen`.
 
 ## Design Principles
 

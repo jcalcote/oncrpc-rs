@@ -1,6 +1,6 @@
 # Generator Fixtures
 
-This directory defines the canonical layout for `onc-rpcgen` fixtures.
+This directory defines the canonical layout for `onc-rpc-gen` fixtures.
 
 ## Layout
 

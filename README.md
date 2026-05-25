@@ -25,7 +25,7 @@ Non-goals for the initial implementation:
 - every historical ONC RPC transport or auth mode
 - mandatory `rpcbind` support for consumers that already use fixed ports or control-plane discovery
 
-## Why `onc-rpcgen` Is Core
+## Why `onc-rpc-gen` Is Core
 
 For this project, XDR-only support is not enough.
 
@@ -35,7 +35,7 @@ usable Rust replacement therefore needs integrated generation for both halves of
 - XDR types: structs, enums, unions, typedefs, variable-length arrays, strings, and opaque values
 - ONC RPC surface: program/version/procedure constants, client call stubs, and server dispatch stubs
 
-That makes `onc-rpcgen` a required crate in the workspace, not an optional future convenience layer.
+That makes `onc-rpc-gen` a required crate in the workspace, not an optional future convenience layer.
 
 ## Workspace Layout
 
@@ -45,7 +45,7 @@ That makes `onc-rpcgen` a required crate in the workspace, not an optional futur
 - `crates/onc-rpc-auth`: auth types and helpers for `AUTH_NONE` / `AUTH_SYS`
 - `crates/onc-rpc-tls`: TLS and STARTTLS integration points
 - `crates/onc-rpc-xdr`: shared XDR encode/decode traits and helpers for generated code
-- `crates/onc-rpcgen`: core code generator for XDR types plus ONC RPC client/server stubs
+- `crates/onc-rpc-gen`: core code generator for XDR types plus ONC RPC client/server stubs
 - `crates/onc-rpc-bind`: optional `rpcbind` v4 support
 
 ## Current Status
@@ -195,12 +195,36 @@ Current CI uses:
 
 - [`dtolnay/rust-toolchain`](https://github.com/dtolnay/rust-toolchain)
 - [`Swatinem/rust-cache`](https://github.com/Swatinem/rust-cache)
+- [`actions/checkout`](https://github.com/actions/checkout)
+
+## CI and Releases
+
+GitHub Actions now runs the core Rust validation set for every pull request and
+push to `main`:
+
+- `cargo fmt --all --check`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `cargo test --workspace`
+- `cargo check --workspace`
+
+Tag pushes matching `v*` trigger a release workflow that:
+
+- reruns the full validation set
+- verifies the release tag matches the workspace version
+- performs package-manifest checks for the publishable workspace crates
+- creates a GitHub Release with generated notes
+- optionally publishes the crates to `crates.io` when a `CRATES_IO_TOKEN`
+  repository secret is configured
+
+The example crate under `examples/time-service/` is intentionally excluded from
+publication.
 
 ## Development
 
 ```bash
 cargo fmt --all
 cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
 cargo check --workspace
 ```
 
@@ -208,6 +232,5 @@ cargo check --workspace
 
 - continue hardening runtime/server behavior under real interoperability and
   load
-- improve `oncrpcgen` CLI help and consumer integration ergonomics
 - broaden TLS interoperability and policy coverage
 - broaden examples and generated-code polish for downstream consumers

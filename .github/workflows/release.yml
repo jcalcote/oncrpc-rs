@@ -1,0 +1,92 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo fmt
+        run: cargo fmt --all --check
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: cargo test
+        run: cargo test --workspace
+
+      - name: cargo check
+        run: cargo check --workspace
+
+      - name: verify release tag matches workspace version
+        run: |
+          expected_tag="v$(awk -F'\"' '/^version = \"/ { print $2; exit }' Cargo.toml)"
+          if [ "${GITHUB_REF_NAME}" != "${expected_tag}" ]; then
+            echo "tag ${GITHUB_REF_NAME} does not match workspace version ${expected_tag}"
+            exit 1
+          fi
+
+      - name: cargo package manifest validation
+        run: |
+          cargo package --list -p onc-rpc-wire
+          cargo package --list -p onc-rpc-xdr
+          cargo package --list -p onc-rpc-auth
+          cargo package --list -p onc-rpc-runtime
+          cargo package --list -p onc-rpc-server
+          cargo package --list -p onc-rpc-tls
+          cargo package --list -p onc-rpc-bind
+          cargo package --list -p onc-rpc-gen
+
+      - name: publish crates.io packages
+        if: ${{ env.CARGO_REGISTRY_TOKEN != '' }}
+        run: |
+          version="$(awk -F'\"' '/^version = \"/ { print $2; exit }' Cargo.toml)"
+
+          publish_and_wait() {
+            local crate="$1"
+            cargo publish --locked -p "${crate}"
+
+            for _ in $(seq 1 30); do
+              if curl -fsSL "https://crates.io/api/v1/crates/${crate}/${version}" >/dev/null; then
+                return 0
+              fi
+              sleep 10
+            done
+
+            echo "crate ${crate} version ${version} did not appear on crates.io in time"
+            return 1
+          }
+
+          publish_and_wait onc-rpc-wire
+          publish_and_wait onc-rpc-xdr
+          publish_and_wait onc-rpc-auth
+          publish_and_wait onc-rpc-runtime
+          publish_and_wait onc-rpc-server
+          publish_and_wait onc-rpc-tls
+          publish_and_wait onc-rpc-bind
+          publish_and_wait onc-rpc-gen
+
+      - name: create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --verify-tag \
+            --generate-notes \
+            --latest

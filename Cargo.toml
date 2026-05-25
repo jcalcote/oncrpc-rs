@@ -7,7 +7,7 @@ members = [
     "crates/onc-rpc-tls",
     "crates/onc-rpc-wire",
     "crates/onc-rpc-xdr",
-    "crates/onc-rpcgen",
+    "crates/onc-rpc-gen",
     "examples/time-service",
 ]
 resolver = "2"

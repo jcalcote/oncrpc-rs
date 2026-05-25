@@ -17,6 +17,6 @@ bytes.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
-onc-rpc-auth = { path = "../onc-rpc-auth" }
-onc-rpc-wire = { path = "../onc-rpc-wire" }
-onc-rpc-xdr = { path = "../onc-rpc-xdr" }
+onc-rpc-auth = { version = "0.1.0", path = "../onc-rpc-auth" }
+onc-rpc-wire = { version = "0.1.0", path = "../onc-rpc-wire" }
+onc-rpc-xdr = { version = "0.1.0", path = "../onc-rpc-xdr" }
