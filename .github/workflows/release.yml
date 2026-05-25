@@ -36,7 +36,7 @@ jobs:
 
       - name: verify release tag matches workspace version
         run: |
-          expected_tag="v$(awk -F'\"' '/^version = \"/ { print $2; exit }' Cargo.toml)"
+          expected_tag="v$(awk -F'\"' '/^version = "/ { print $2; exit }' Cargo.toml)"
           if [ "${GITHUB_REF_NAME}" != "${expected_tag}" ]; then
             echo "tag ${GITHUB_REF_NAME} does not match workspace version ${expected_tag}"
             exit 1
@@ -56,31 +56,38 @@ jobs:
       - name: publish crates.io packages
         if: ${{ env.CARGO_REGISTRY_TOKEN != '' }}
         run: |
-          version="$(awk -F'\"' '/^version = \"/ { print $2; exit }' Cargo.toml)"
-
-          publish_and_wait() {
+          publish_if_needed() {
             local crate="$1"
-            cargo publish --locked -p "${crate}"
+            local output
 
-            for _ in $(seq 1 30); do
-              if curl -fsSL "https://crates.io/api/v1/crates/${crate}/${version}" >/dev/null; then
-                return 0
-              fi
-              sleep 10
-            done
+            if output="$(cargo publish --locked -p "${crate}" 2>&1)"; then
+              printf '%s\n' "${output}"
+              return 0
+            fi
 
-            echo "crate ${crate} version ${version} did not appear on crates.io in time"
+            printf '%s\n' "${output}"
+
+            if printf '%s\n' "${output}" | grep -Fq "already exists on crates.io index"; then
+              echo "crate ${crate} is already published; continuing"
+              return 0
+            fi
+
+            if printf '%s\n' "${output}" | grep -Fq "already uploaded"; then
+              echo "crate ${crate} is already published; continuing"
+              return 0
+            fi
+
             return 1
           }
 
-          publish_and_wait onc-rpc-wire
-          publish_and_wait onc-rpc-xdr
-          publish_and_wait onc-rpc-auth
-          publish_and_wait onc-rpc-runtime
-          publish_and_wait onc-rpc-server
-          publish_and_wait onc-rpc-tls
-          publish_and_wait onc-rpc-bind
-          publish_and_wait onc-rpc-gen
+          publish_if_needed onc-rpc-wire
+          publish_if_needed onc-rpc-xdr
+          publish_if_needed onc-rpc-auth
+          publish_if_needed onc-rpc-runtime
+          publish_if_needed onc-rpc-server
+          publish_if_needed onc-rpc-tls
+          publish_if_needed onc-rpc-bind
+          publish_if_needed onc-rpc-gen
 
       - name: create GitHub release
         env:
