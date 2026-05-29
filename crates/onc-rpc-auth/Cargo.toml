@@ -14,5 +14,5 @@ description = "Authentication types and helpers for ONC RPC clients and servers.
 [dependencies]
 bytes.workspace = true
 thiserror.workspace = true
-onc-rpc-wire = { version = "0.1.0", path = "../onc-rpc-wire" }
-onc-rpc-xdr = { version = "0.1.0", path = "../onc-rpc-xdr" }
+onc-rpc-wire = { version = "0.2.0", path = "../onc-rpc-wire" }
+onc-rpc-xdr = { version = "0.2.0", path = "../onc-rpc-xdr" }
