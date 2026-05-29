@@ -716,7 +716,7 @@ impl StubEmitter {
                 indent,
                 &mut self.out,
                 format_args!(
-                    "fn {}(&self) -> Result<{}, onc_rpc_server::DispatchError>;",
+                    "fn {}(&self, request: &onc_rpc_server::RequestContext) -> Result<{}, onc_rpc_server::DispatchError>;",
                     method_name, reply_type
                 ),
             );
@@ -725,7 +725,7 @@ impl StubEmitter {
                 indent,
                 &mut self.out,
                 format_args!(
-                    "fn {}(&self, argument: {}) -> Result<{}, onc_rpc_server::DispatchError>;",
+                    "fn {}(&self, request: &onc_rpc_server::RequestContext, argument: {}) -> Result<{}, onc_rpc_server::DispatchError>;",
                     method_name, request_type, reply_type
                 ),
             );
@@ -755,7 +755,7 @@ impl StubEmitter {
                 indent,
                 &mut self.out,
                 format_args!(
-                    "async fn {}(&self) -> Result<{}, onc_rpc_server::DispatchError>;",
+                    "async fn {}(&self, request: &onc_rpc_server::RequestContext) -> Result<{}, onc_rpc_server::DispatchError>;",
                     method_name, reply_type
                 ),
             );
@@ -764,7 +764,7 @@ impl StubEmitter {
                 indent,
                 &mut self.out,
                 format_args!(
-                    "async fn {}(&self, argument: {}) -> Result<{}, onc_rpc_server::DispatchError>;",
+                    "async fn {}(&self, request: &onc_rpc_server::RequestContext, argument: {}) -> Result<{}, onc_rpc_server::DispatchError>;",
                     method_name, request_type, reply_type
                 ),
             );
@@ -807,13 +807,13 @@ impl StubEmitter {
                 line(
                     indent + 4,
                     &mut self.out,
-                    format_args!("self.inner.{}()?;", method_name),
+                    format_args!("self.inner.{}(&request)?;", method_name),
                 );
             } else {
                 line(
                     indent + 4,
                     &mut self.out,
-                    format_args!("let response = self.inner.{}()?;", method_name),
+                    format_args!("let response = self.inner.{}(&request)?;", method_name),
                 );
             }
         } else {
@@ -830,13 +830,16 @@ impl StubEmitter {
                 line(
                     indent + 4,
                     &mut self.out,
-                    format_args!("self.inner.{}(argument)?;", method_name),
+                    format_args!("self.inner.{}(&request, argument)?;", method_name),
                 );
             } else {
                 line(
                     indent + 4,
                     &mut self.out,
-                    format_args!("let response = self.inner.{}(argument)?;", method_name),
+                    format_args!(
+                        "let response = self.inner.{}(&request, argument)?;",
+                        method_name
+                    ),
                 );
             }
         }
@@ -903,13 +906,16 @@ impl StubEmitter {
                 line(
                     indent + 4,
                     &mut self.out,
-                    format_args!("self.inner.{}().await?;", method_name),
+                    format_args!("self.inner.{}(&request).await?;", method_name),
                 );
             } else {
                 line(
                     indent + 4,
                     &mut self.out,
-                    format_args!("let response = self.inner.{}().await?;", method_name),
+                    format_args!(
+                        "let response = self.inner.{}(&request).await?;",
+                        method_name
+                    ),
                 );
             }
         } else {
@@ -926,14 +932,14 @@ impl StubEmitter {
                 line(
                     indent + 4,
                     &mut self.out,
-                    format_args!("self.inner.{}(argument).await?;", method_name),
+                    format_args!("self.inner.{}(&request, argument).await?;", method_name),
                 );
             } else {
                 line(
                     indent + 4,
                     &mut self.out,
                     format_args!(
-                        "let response = self.inner.{}(argument).await?;",
+                        "let response = self.inner.{}(&request, argument).await?;",
                         method_name
                     ),
                 );

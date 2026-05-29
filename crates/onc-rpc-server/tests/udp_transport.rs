@@ -9,8 +9,8 @@ use onc_rpc_server::{
 };
 use onc_rpc_xdr::XdrEncode;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::task::JoinSet;
 
@@ -18,6 +18,17 @@ struct SyncEchoDispatch;
 
 impl Dispatch for SyncEchoDispatch {
     fn dispatch(&self, request: RequestContext) -> Result<ResponsePayload, DispatchError> {
+        Ok(ResponsePayload::success(request.payload))
+    }
+}
+
+struct SyncPeerInspectDispatch {
+    seen_peer: Arc<Mutex<Option<SocketAddr>>>,
+}
+
+impl Dispatch for SyncPeerInspectDispatch {
+    fn dispatch(&self, request: RequestContext) -> Result<ResponsePayload, DispatchError> {
+        *self.seen_peer.lock().expect("mutex poisoned") = request.peer_addr;
         Ok(ResponsePayload::success(request.payload))
     }
 }
@@ -66,8 +77,78 @@ impl AsyncDispatch for AsyncAuthInspectDispatch {
     }
 }
 
+struct AsyncPeerInspectDispatch {
+    seen_peer: Arc<Mutex<Option<SocketAddr>>>,
+}
+
+#[async_trait]
+impl AsyncDispatch for AsyncPeerInspectDispatch {
+    async fn dispatch(&self, request: RequestContext) -> Result<ResponsePayload, DispatchError> {
+        *self.seen_peer.lock().expect("mutex poisoned") = request.peer_addr;
+        Ok(ResponsePayload::success(request.payload))
+    }
+}
+
 fn loopback_addr() -> SocketAddr {
     SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)
+}
+
+#[tokio::test]
+async fn async_udp_server_transport_exposes_udp_peer_addr_to_dispatch() {
+    let seen_peer = Arc::new(Mutex::new(None));
+    let mut server = ServerBuilder::new()
+        .with_bind_addr(loopback_addr())
+        .build_async();
+    server
+        .register(
+            Program {
+                number: 100_003,
+                version: 3,
+            },
+            AsyncPeerInspectDispatch {
+                seen_peer: seen_peer.clone(),
+            },
+        )
+        .expect("registration should succeed");
+
+    let transport = TokioAsyncUdpServerTransport::bind(server)
+        .await
+        .expect("server should bind");
+    let addr = transport.local_addr().expect("local addr");
+    let serve = tokio::spawn(async move { transport.accept_once().await });
+
+    let config = ClientConfig::new(addr)
+        .with_connect_timeout(Duration::from_secs(5))
+        .with_default_call_timeout(Duration::from_secs(2));
+    let client_transport = TokioAsyncUdpClientTransport::connect(&config)
+        .await
+        .expect("client should connect");
+    let client = AsyncClient::new(config, client_transport);
+
+    let reply: u32 = client
+        .call_typed(
+            ProgramVersion {
+                program: 100_003,
+                version: 3,
+            },
+            Procedure(1),
+            &99_u32,
+        )
+        .await
+        .expect("call should succeed");
+
+    assert_eq!(reply, 99);
+    let peer = seen_peer
+        .lock()
+        .expect("mutex poisoned")
+        .expect("peer addr should be captured");
+    assert!(peer.ip().is_loopback());
+    assert_ne!(peer.port(), 0);
+
+    serve
+        .await
+        .expect("server task should join")
+        .expect("server transport should complete");
 }
 
 #[tokio::test]
@@ -343,4 +424,67 @@ fn sync_udp_server_transport_dispatches_over_real_tokio_io() {
 
     assert_eq!(reply, 123);
     server_thread.join().expect("server thread should join");
+}
+
+#[test]
+fn sync_udp_server_transport_exposes_udp_peer_addr_to_dispatch() {
+    let seen_peer = Arc::new(Mutex::new(None));
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    let server_seen_peer = seen_peer.clone();
+    let server_thread = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("runtime should build");
+        runtime.block_on(async move {
+            let mut server = ServerBuilder::new().with_bind_addr(loopback_addr()).build();
+            server
+                .register(
+                    Program {
+                        number: 100_003,
+                        version: 3,
+                    },
+                    SyncPeerInspectDispatch {
+                        seen_peer: server_seen_peer,
+                    },
+                )
+                .expect("registration should succeed");
+            let transport = TokioUdpServerTransport::bind(server)
+                .await
+                .expect("server should bind");
+            let addr = transport.local_addr().expect("local addr");
+            tx.send(addr).expect("addr send should succeed");
+            transport
+                .accept_once()
+                .await
+                .expect("server should complete");
+        });
+    });
+
+    let addr = rx.recv().expect("addr receive should succeed");
+    let config = ClientConfig::new(addr)
+        .with_connect_timeout(Duration::from_secs(5))
+        .with_default_call_timeout(Duration::from_secs(2));
+    let client_transport = TokioUdpClientTransport::connect(&config).expect("client connect");
+    let client = Client::new(config, client_transport);
+
+    let reply: u32 = client
+        .call_typed(
+            ProgramVersion {
+                program: 100_003,
+                version: 3,
+            },
+            Procedure(1),
+            &123_u32,
+        )
+        .expect("call should succeed");
+
+    assert_eq!(reply, 123);
+    server_thread.join().expect("server thread should join");
+    let peer = seen_peer
+        .lock()
+        .expect("mutex poisoned")
+        .expect("peer addr should be captured");
+    assert!(peer.ip().is_loopback());
+    assert_ne!(peer.port(), 0);
 }

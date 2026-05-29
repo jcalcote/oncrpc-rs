@@ -104,8 +104,8 @@ pub mod blob_service {
 
         pub mod server {
             pub trait BLOB_SERVICE_V1Service {
-                fn blob_null(&self) -> Result<(), onc_rpc_server::DispatchError>;
-                fn blob_copy(&self, argument: crate::blob_service_basic::copy_request_t) -> Result<crate::transfer_types::job_result_t, onc_rpc_server::DispatchError>;
+                fn blob_null(&self, request: &onc_rpc_server::RequestContext) -> Result<(), onc_rpc_server::DispatchError>;
+                fn blob_copy(&self, request: &onc_rpc_server::RequestContext, argument: crate::blob_service_basic::copy_request_t) -> Result<crate::transfer_types::job_result_t, onc_rpc_server::DispatchError>;
             }
 
             pub struct BLOB_SERVICE_V1Dispatch<T> {
@@ -123,13 +123,13 @@ pub mod blob_service {
                     match request.procedure.0 {
                         0 => {
                             <() as onc_rpc_xdr::XdrDecode>::from_xdr_bytes(&request.payload).map_err(|_| onc_rpc_server::DispatchError::GarbageArgs)?;
-                            self.inner.blob_null()?;
+                            self.inner.blob_null(&request)?;
                             let payload = onc_rpc_xdr::XdrEncode::to_xdr_bytes(&()).map_err(|_| onc_rpc_server::DispatchError::SystemError)?;
                             Ok(onc_rpc_server::ResponsePayload::success(payload))
                         }
                         1 => {
                             let argument = <crate::blob_service_basic::copy_request_t as onc_rpc_xdr::XdrDecode>::from_xdr_bytes(&request.payload).map_err(|_| onc_rpc_server::DispatchError::GarbageArgs)?;
-                            let response = self.inner.blob_copy(argument)?;
+                            let response = self.inner.blob_copy(&request, argument)?;
                             let payload = onc_rpc_xdr::XdrEncode::to_xdr_bytes(&response).map_err(|_| onc_rpc_server::DispatchError::SystemError)?;
                             Ok(onc_rpc_server::ResponsePayload::success(payload))
                         }
@@ -143,8 +143,8 @@ pub mod blob_service {
         pub mod async_server {
             #[onc_rpc_server::async_trait]
             pub trait BLOB_SERVICE_V1Service {
-                async fn blob_null(&self) -> Result<(), onc_rpc_server::DispatchError>;
-                async fn blob_copy(&self, argument: crate::blob_service_basic::copy_request_t) -> Result<crate::transfer_types::job_result_t, onc_rpc_server::DispatchError>;
+                async fn blob_null(&self, request: &onc_rpc_server::RequestContext) -> Result<(), onc_rpc_server::DispatchError>;
+                async fn blob_copy(&self, request: &onc_rpc_server::RequestContext, argument: crate::blob_service_basic::copy_request_t) -> Result<crate::transfer_types::job_result_t, onc_rpc_server::DispatchError>;
             }
 
             pub struct BLOB_SERVICE_V1Dispatch<T> {
@@ -163,13 +163,13 @@ pub mod blob_service {
                     match request.procedure.0 {
                         0 => {
                             <() as onc_rpc_xdr::XdrDecode>::from_xdr_bytes(&request.payload).map_err(|_| onc_rpc_server::DispatchError::GarbageArgs)?;
-                            self.inner.blob_null().await?;
+                            self.inner.blob_null(&request).await?;
                             let payload = onc_rpc_xdr::XdrEncode::to_xdr_bytes(&()).map_err(|_| onc_rpc_server::DispatchError::SystemError)?;
                             Ok(onc_rpc_server::ResponsePayload::success(payload))
                         }
                         1 => {
                             let argument = <crate::blob_service_basic::copy_request_t as onc_rpc_xdr::XdrDecode>::from_xdr_bytes(&request.payload).map_err(|_| onc_rpc_server::DispatchError::GarbageArgs)?;
-                            let response = self.inner.blob_copy(argument).await?;
+                            let response = self.inner.blob_copy(&request, argument).await?;
                             let payload = onc_rpc_xdr::XdrEncode::to_xdr_bytes(&response).map_err(|_| onc_rpc_server::DispatchError::SystemError)?;
                             Ok(onc_rpc_server::ResponsePayload::success(payload))
                         }
