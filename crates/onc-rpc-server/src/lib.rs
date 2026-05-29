@@ -64,6 +64,7 @@ pub struct RequestContext {
     pub xid: Xid,
     pub program: ProgramVersion,
     pub procedure: Procedure,
+    pub peer_addr: Option<SocketAddr>,
     pub credentials: OpaqueAuth,
     pub verifier: OpaqueAuth,
     pub payload: Bytes,
@@ -225,7 +226,15 @@ impl Server {
     }
 
     pub fn handle_message(&self, message: RpcMessage) -> Result<RpcMessage, ServerError> {
-        let (xid, request, dispatcher) = self.resolve_dispatch(message)?;
+        self.handle_message_with_peer_addr(message, None)
+    }
+
+    pub fn handle_message_with_peer_addr(
+        &self,
+        message: RpcMessage,
+        peer_addr: Option<SocketAddr>,
+    ) -> Result<RpcMessage, ServerError> {
+        let (xid, request, dispatcher) = self.resolve_dispatch(message, peer_addr)?;
         let body = match dispatcher {
             Some(dispatch) => match dispatch.dispatch(request) {
                 Ok(response) => success_reply(response),
@@ -242,7 +251,11 @@ impl Server {
         })
     }
 
-    fn resolve_dispatch(&self, message: RpcMessage) -> Result<DispatchResolution, ServerError> {
+    fn resolve_dispatch(
+        &self,
+        message: RpcMessage,
+        peer_addr: Option<SocketAddr>,
+    ) -> Result<DispatchResolution, ServerError> {
         let xid = message.xid;
 
         let MessageBody::Call(call) = message.body else {
@@ -258,6 +271,7 @@ impl Server {
             xid,
             program,
             procedure: call.procedure,
+            peer_addr,
             credentials: call.credentials,
             verifier: call.verifier,
             payload: call.payload,
@@ -295,7 +309,15 @@ impl AsyncServer {
     }
 
     pub async fn handle_message(&self, message: RpcMessage) -> Result<RpcMessage, ServerError> {
-        let (xid, request, dispatcher) = self.resolve_dispatch(message)?;
+        self.handle_message_with_peer_addr(message, None).await
+    }
+
+    pub async fn handle_message_with_peer_addr(
+        &self,
+        message: RpcMessage,
+        peer_addr: Option<SocketAddr>,
+    ) -> Result<RpcMessage, ServerError> {
+        let (xid, request, dispatcher) = self.resolve_dispatch(message, peer_addr)?;
         let body = match dispatcher {
             Some(dispatch) => match dispatch.dispatch(request).await {
                 Ok(response) => success_reply(response),
@@ -315,6 +337,7 @@ impl AsyncServer {
     fn resolve_dispatch(
         &self,
         message: RpcMessage,
+        peer_addr: Option<SocketAddr>,
     ) -> Result<AsyncDispatchResolution, ServerError> {
         let xid = message.xid;
 
@@ -331,6 +354,7 @@ impl AsyncServer {
             xid,
             program,
             procedure: call.procedure,
+            peer_addr,
             credentials: call.credentials,
             verifier: call.verifier,
             payload: call.payload,

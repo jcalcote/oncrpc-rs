@@ -423,8 +423,12 @@ Example:
 
 ```rust
 pub trait BlobServiceV1Service {
-    fn blob_null(&self) -> Result<(), DispatchError>;
-    fn blob_copy(&self, arg: copy_request_t) -> Result<job_result_t, DispatchError>;
+    fn blob_null(&self, request: &RequestContext) -> Result<(), DispatchError>;
+    fn blob_copy(
+        &self,
+        request: &RequestContext,
+        arg: copy_request_t,
+    ) -> Result<job_result_t, DispatchError>;
 }
 ```
 
@@ -433,6 +437,8 @@ Generated dispatch glue must:
 - decode typed arguments from request payload bytes
 - invoke the typed service trait
 - encode typed results into reply payload bytes
+- pass request metadata, including inbound peer address when transport-provided,
+  to typed service methods
 - map malformed payloads to `DispatchError::GarbageArgs`
 - map reply encoding failures to `DispatchError::SystemError`
 
@@ -454,6 +460,7 @@ pub mod async_server {
     pub trait BlobServiceV1Service {
         async fn blob_copy(
             &self,
+            request: &RequestContext,
             arg: copy_request_t,
         ) -> Result<job_result_t, DispatchError>;
     }

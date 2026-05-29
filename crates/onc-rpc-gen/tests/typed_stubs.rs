@@ -249,19 +249,29 @@ fn generated_typed_client_with_auth_sys_forwards_auth_options() {
 
 struct TypedService {
     seen: Arc<Mutex<Vec<blob_service_basic::copy_request_t>>>,
+    seen_peers: Arc<Mutex<Vec<Option<SocketAddr>>>>,
 }
 
 impl blob_service_basic_stubs::blob_service::blob_service_v1::server::BLOB_SERVICE_V1Service
     for TypedService
 {
-    fn blob_null(&self) -> Result<(), DispatchError> {
+    fn blob_null(&self, request: &RequestContext) -> Result<(), DispatchError> {
+        self.seen_peers
+            .lock()
+            .expect("mutex poisoned")
+            .push(request.peer_addr);
         Ok(())
     }
 
     fn blob_copy(
         &self,
+        request: &RequestContext,
         argument: blob_service_basic::copy_request_t,
     ) -> Result<transfer_types::job_result_t, DispatchError> {
+        self.seen_peers
+            .lock()
+            .expect("mutex poisoned")
+            .push(request.peer_addr);
         self.seen.lock().expect("mutex poisoned").push(argument);
         Ok(sample_reply())
     }
@@ -270,11 +280,18 @@ impl blob_service_basic_stubs::blob_service::blob_service_v1::server::BLOB_SERVI
 #[test]
 fn generated_typed_dispatch_unmarshals_request_and_marshals_reply_payloads() {
     let seen = Arc::new(Mutex::new(Vec::new()));
+    let seen_peers = Arc::new(Mutex::new(Vec::new()));
     let dispatch =
         blob_service_basic_stubs::blob_service::blob_service_v1::server::BLOB_SERVICE_V1Dispatch::new(
-            TypedService { seen: seen.clone() },
+            TypedService {
+                seen: seen.clone(),
+                seen_peers: seen_peers.clone(),
+            },
         );
     let expected_request = sample_request();
+    let peer_addr = "127.0.0.1:55000"
+        .parse::<SocketAddr>()
+        .expect("peer addr should parse");
     let request_payload = expected_request
         .to_xdr_bytes()
         .expect("request payload should encode");
@@ -287,6 +304,7 @@ fn generated_typed_dispatch_unmarshals_request_and_marshals_reply_payloads() {
                 version: 1,
             },
             procedure: Procedure(1),
+            peer_addr: Some(peer_addr),
             credentials: OpaqueAuth::none(),
             verifier: OpaqueAuth::none(),
             payload: request_payload,
@@ -299,6 +317,10 @@ fn generated_typed_dispatch_unmarshals_request_and_marshals_reply_payloads() {
     assert_eq!(
         seen.lock().expect("mutex poisoned").as_slice(),
         &[expected_request]
+    );
+    assert_eq!(
+        seen_peers.lock().expect("mutex poisoned").as_slice(),
+        &[Some(peer_addr)]
     );
 }
 
@@ -376,20 +398,30 @@ async fn generated_async_typed_client_with_options_forwards_call_options() {
 
 struct AsyncTypedService {
     seen: Arc<Mutex<Vec<blob_service_basic::copy_request_t>>>,
+    seen_peers: Arc<Mutex<Vec<Option<SocketAddr>>>>,
 }
 
 #[server_async_trait]
 impl blob_service_basic_stubs::blob_service::blob_service_v1::async_server::BLOB_SERVICE_V1Service
     for AsyncTypedService
 {
-    async fn blob_null(&self) -> Result<(), DispatchError> {
+    async fn blob_null(&self, request: &RequestContext) -> Result<(), DispatchError> {
+        self.seen_peers
+            .lock()
+            .expect("mutex poisoned")
+            .push(request.peer_addr);
         Ok(())
     }
 
     async fn blob_copy(
         &self,
+        request: &RequestContext,
         argument: blob_service_basic::copy_request_t,
     ) -> Result<transfer_types::job_result_t, DispatchError> {
+        self.seen_peers
+            .lock()
+            .expect("mutex poisoned")
+            .push(request.peer_addr);
         self.seen.lock().expect("mutex poisoned").push(argument);
         Ok(sample_reply())
     }
@@ -398,10 +430,17 @@ impl blob_service_basic_stubs::blob_service::blob_service_v1::async_server::BLOB
 #[tokio::test]
 async fn generated_async_typed_dispatch_unmarshals_request_and_marshals_reply_payloads() {
     let seen = Arc::new(Mutex::new(Vec::new()));
+    let seen_peers = Arc::new(Mutex::new(Vec::new()));
     let dispatch = blob_service_basic_stubs::blob_service::blob_service_v1::async_server::BLOB_SERVICE_V1Dispatch::new(
-        AsyncTypedService { seen: seen.clone() },
+        AsyncTypedService {
+            seen: seen.clone(),
+            seen_peers: seen_peers.clone(),
+        },
     );
     let expected_request = sample_request();
+    let peer_addr = "127.0.0.1:55001"
+        .parse::<SocketAddr>()
+        .expect("peer addr should parse");
     let request_payload = expected_request
         .to_xdr_bytes()
         .expect("request payload should encode");
@@ -414,6 +453,7 @@ async fn generated_async_typed_dispatch_unmarshals_request_and_marshals_reply_pa
                 version: 1,
             },
             procedure: Procedure(1),
+            peer_addr: Some(peer_addr),
             credentials: OpaqueAuth::none(),
             verifier: OpaqueAuth::none(),
             payload: request_payload,
@@ -428,11 +468,16 @@ async fn generated_async_typed_dispatch_unmarshals_request_and_marshals_reply_pa
         seen.lock().expect("mutex poisoned").as_slice(),
         &[expected_request]
     );
+    assert_eq!(
+        seen_peers.lock().expect("mutex poisoned").as_slice(),
+        &[Some(peer_addr)]
+    );
 }
 
 #[tokio::test]
 async fn generated_async_stubs_round_trip_over_real_tokio_transport() {
     let seen = Arc::new(Mutex::new(Vec::new()));
+    let seen_peers = Arc::new(Mutex::new(Vec::new()));
     let mut server = ServerBuilder::new()
         .with_bind_addr(
             "127.0.0.1:0"
@@ -447,7 +492,10 @@ async fn generated_async_stubs_round_trip_over_real_tokio_transport() {
                 version: 1,
             },
             blob_service_basic_stubs::blob_service::blob_service_v1::async_server::BLOB_SERVICE_V1Dispatch::new(
-                AsyncTypedService { seen: seen.clone() },
+                AsyncTypedService {
+                    seen: seen.clone(),
+                    seen_peers: seen_peers.clone(),
+                },
             ),
         )
         .expect("registration should succeed");
@@ -495,6 +543,19 @@ async fn generated_async_stubs_round_trip_over_real_tokio_transport() {
         .collect::<Vec<_>>();
     seen_ids.sort_unstable();
     assert_eq!(seen_ids, observed_ids);
+    assert_eq!(
+        seen_peers.lock().expect("mutex poisoned").len(),
+        observed_ids.len()
+    );
+    assert!(
+        seen_peers
+            .lock()
+            .expect("mutex poisoned")
+            .iter()
+            .all(|peer| peer
+                .as_ref()
+                .is_some_and(|addr| addr.ip().is_loopback() && addr.port() != 0))
+    );
 
     drop(stub);
     serve

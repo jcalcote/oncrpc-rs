@@ -117,7 +117,10 @@ struct TimeService;
 
 #[onc_rpc_server::async_trait]
 impl TIME_SERVICE_V1Service for TimeService {
-    async fn get_time(&self) -> Result<time_service::time_string, onc_rpc_server::DispatchError> {
+    async fn get_time(
+        &self,
+        _request: &onc_rpc_server::RequestContext,
+    ) -> Result<time_service::time_string, onc_rpc_server::DispatchError> {
         Ok("unix-seconds: ...".to_string())
     }
 }

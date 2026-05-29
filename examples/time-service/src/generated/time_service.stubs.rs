@@ -69,7 +69,7 @@ pub mod time_service {
 
         pub mod server {
             pub trait TIME_SERVICE_V1Service {
-                fn get_time(&self) -> Result<crate::time_service::time_string, onc_rpc_server::DispatchError>;
+                fn get_time(&self, request: &onc_rpc_server::RequestContext) -> Result<crate::time_service::time_string, onc_rpc_server::DispatchError>;
             }
 
             pub struct TIME_SERVICE_V1Dispatch<T> {
@@ -87,7 +87,7 @@ pub mod time_service {
                     match request.procedure.0 {
                         1 => {
                             <() as onc_rpc_xdr::XdrDecode>::from_xdr_bytes(&request.payload).map_err(|_| onc_rpc_server::DispatchError::GarbageArgs)?;
-                            let response = self.inner.get_time()?;
+                            let response = self.inner.get_time(&request)?;
                             let payload = onc_rpc_xdr::XdrEncode::to_xdr_bytes(&response).map_err(|_| onc_rpc_server::DispatchError::SystemError)?;
                             Ok(onc_rpc_server::ResponsePayload::success(payload))
                         }
@@ -101,7 +101,7 @@ pub mod time_service {
         pub mod async_server {
             #[onc_rpc_server::async_trait]
             pub trait TIME_SERVICE_V1Service {
-                async fn get_time(&self) -> Result<crate::time_service::time_string, onc_rpc_server::DispatchError>;
+                async fn get_time(&self, request: &onc_rpc_server::RequestContext) -> Result<crate::time_service::time_string, onc_rpc_server::DispatchError>;
             }
 
             pub struct TIME_SERVICE_V1Dispatch<T> {
@@ -120,7 +120,7 @@ pub mod time_service {
                     match request.procedure.0 {
                         1 => {
                             <() as onc_rpc_xdr::XdrDecode>::from_xdr_bytes(&request.payload).map_err(|_| onc_rpc_server::DispatchError::GarbageArgs)?;
-                            let response = self.inner.get_time().await?;
+                            let response = self.inner.get_time(&request).await?;
                             let payload = onc_rpc_xdr::XdrEncode::to_xdr_bytes(&response).map_err(|_| onc_rpc_server::DispatchError::SystemError)?;
                             Ok(onc_rpc_server::ResponsePayload::success(payload))
                         }

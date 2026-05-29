@@ -87,7 +87,7 @@ impl TokioServerTransport {
     }
 
     pub async fn accept_once(&self) -> Result<(), ServerTransportError> {
-        let (stream, _) = self
+        let (stream, peer_addr) = self
             .listener
             .accept()
             .await
@@ -96,6 +96,7 @@ impl TokioServerTransport {
             self.runtime_handle.clone(),
             self.runtime_guard.clone(),
             stream,
+            peer_addr,
             self.server.clone(),
             self.worker_limit.clone(),
         )
@@ -104,7 +105,7 @@ impl TokioServerTransport {
 
     pub async fn serve(self) -> Result<(), ServerTransportError> {
         loop {
-            let (stream, _) = self
+            let (stream, peer_addr) = self
                 .listener
                 .accept()
                 .await
@@ -114,7 +115,7 @@ impl TokioServerTransport {
             let worker_limit = self.worker_limit.clone();
             self.runtime_handle.spawn(async move {
                 let _runtime_guard = runtime_guard;
-                let _ = serve_sync_connection(stream, server, worker_limit).await;
+                let _ = serve_sync_connection(stream, peer_addr, server, worker_limit).await;
             });
         }
     }
@@ -163,7 +164,7 @@ impl TokioAsyncServerTransport {
     }
 
     pub async fn accept_once(&self) -> Result<(), ServerTransportError> {
-        let (stream, _) = self
+        let (stream, peer_addr) = self
             .listener
             .accept()
             .await
@@ -172,6 +173,7 @@ impl TokioAsyncServerTransport {
             self.runtime_handle.clone(),
             self.runtime_guard.clone(),
             stream,
+            peer_addr,
             self.server.clone(),
             self.worker_limit.clone(),
         )
@@ -180,7 +182,7 @@ impl TokioAsyncServerTransport {
 
     pub async fn serve(self) -> Result<(), ServerTransportError> {
         loop {
-            let (stream, _) = self
+            let (stream, peer_addr) = self
                 .listener
                 .accept()
                 .await
@@ -190,7 +192,7 @@ impl TokioAsyncServerTransport {
             let worker_limit = self.worker_limit.clone();
             self.runtime_handle.spawn(async move {
                 let _runtime_guard = runtime_guard;
-                let _ = serve_async_connection(stream, server, worker_limit).await;
+                let _ = serve_async_connection(stream, peer_addr, server, worker_limit).await;
             });
         }
     }
@@ -352,6 +354,7 @@ impl crate::AsyncServerTransportIntrospection for TokioAsyncUdpServerTransport {
 
 async fn serve_sync_connection(
     stream: TcpStream,
+    peer_addr: std::net::SocketAddr,
     server: Arc<Server>,
     worker_limit: Arc<Semaphore>,
 ) -> Result<(), ServerTransportError> {
@@ -368,7 +371,7 @@ async fn serve_sync_connection(
             let permit = acquire_worker_permit(worker_limit.clone()).await?;
             tokio::spawn(async move {
                 let _permit = permit;
-                if let Ok(reply) = server.handle_message(message) {
+                if let Ok(reply) = server.handle_message_with_peer_addr(message, Some(peer_addr)) {
                     let mut writer = writer.lock().await;
                     let _ = write_rpc_message(&mut *writer, &reply).await;
                 }
@@ -387,6 +390,7 @@ async fn serve_sync_connection(
 
 async fn serve_async_connection(
     stream: TcpStream,
+    peer_addr: std::net::SocketAddr,
     server: Arc<AsyncServer>,
     worker_limit: Arc<Semaphore>,
 ) -> Result<(), ServerTransportError> {
@@ -403,7 +407,10 @@ async fn serve_async_connection(
             let permit = acquire_worker_permit(worker_limit.clone()).await?;
             tokio::spawn(async move {
                 let _permit = permit;
-                if let Ok(reply) = server.handle_message(message).await {
+                if let Ok(reply) = server
+                    .handle_message_with_peer_addr(message, Some(peer_addr))
+                    .await
+                {
                     let mut writer = writer.lock().await;
                     let _ = write_rpc_message(&mut *writer, &reply).await;
                 }
@@ -438,7 +445,7 @@ async fn handle_sync_udp_datagram(
     datagram: Bytes,
 ) -> Result<(), ServerTransportError> {
     let message = decode_rpc_message_datagram(&datagram).map_err(map_runtime_error)?;
-    let reply = server.handle_message(message)?;
+    let reply = server.handle_message_with_peer_addr(message, Some(peer))?;
     let payload = encode_rpc_message_datagram(&reply)?;
     socket
         .send_to(&payload, peer)
@@ -454,7 +461,9 @@ async fn handle_async_udp_datagram(
     datagram: Bytes,
 ) -> Result<(), ServerTransportError> {
     let message = decode_rpc_message_datagram(&datagram).map_err(map_runtime_error)?;
-    let reply = server.handle_message(message).await?;
+    let reply = server
+        .handle_message_with_peer_addr(message, Some(peer))
+        .await?;
     let payload = encode_rpc_message_datagram(&reply)?;
     socket
         .send_to(&payload, peer)
@@ -474,13 +483,14 @@ async fn run_sync_connection_on_runtime(
     runtime_handle: tokio::runtime::Handle,
     runtime_guard: Arc<OwnedRuntime>,
     stream: TcpStream,
+    peer_addr: std::net::SocketAddr,
     server: Arc<Server>,
     worker_limit: Arc<Semaphore>,
 ) -> Result<(), ServerTransportError> {
     let (tx, rx) = oneshot::channel();
     runtime_handle.spawn(async move {
         let _runtime_guard = runtime_guard;
-        let _ = tx.send(serve_sync_connection(stream, server, worker_limit).await);
+        let _ = tx.send(serve_sync_connection(stream, peer_addr, server, worker_limit).await);
     });
     rx.await
         .map_err(|_| ServerTransportError::Io("server runtime terminated".into()))?
@@ -490,13 +500,14 @@ async fn run_async_connection_on_runtime(
     runtime_handle: tokio::runtime::Handle,
     runtime_guard: Arc<OwnedRuntime>,
     stream: TcpStream,
+    peer_addr: std::net::SocketAddr,
     server: Arc<AsyncServer>,
     worker_limit: Arc<Semaphore>,
 ) -> Result<(), ServerTransportError> {
     let (tx, rx) = oneshot::channel();
     runtime_handle.spawn(async move {
         let _runtime_guard = runtime_guard;
-        let _ = tx.send(serve_async_connection(stream, server, worker_limit).await);
+        let _ = tx.send(serve_async_connection(stream, peer_addr, server, worker_limit).await);
     });
     rx.await
         .map_err(|_| ServerTransportError::Io("server runtime terminated".into()))?

@@ -66,9 +66,9 @@ fn stub_emission_generates_client_service_and_dispatch_shapes() {
     ));
     assert!(emitted.contains("pub mod server {"));
     assert!(emitted.contains("pub trait BLOB_SERVICE_V1Service {"));
-    assert!(emitted.contains("fn blob_null(&self) -> Result<(), onc_rpc_server::DispatchError>;"));
+    assert!(emitted.contains("fn blob_null(&self, request: &onc_rpc_server::RequestContext) -> Result<(), onc_rpc_server::DispatchError>;"));
     assert!(emitted.contains(
-        "fn blob_copy(&self, argument: crate::blob_service_basic::copy_request_t) -> Result<crate::transfer_types::job_result_t, onc_rpc_server::DispatchError>;"
+        "fn blob_copy(&self, request: &onc_rpc_server::RequestContext, argument: crate::blob_service_basic::copy_request_t) -> Result<crate::transfer_types::job_result_t, onc_rpc_server::DispatchError>;"
     ));
     assert!(emitted.contains("pub struct BLOB_SERVICE_V1Dispatch<T> {"));
     assert!(emitted.contains("impl<T> onc_rpc_server::Dispatch for BLOB_SERVICE_V1Dispatch<T>"));
@@ -82,12 +82,12 @@ fn stub_emission_generates_client_service_and_dispatch_shapes() {
     assert!(emitted.contains("pub mod async_server {"));
     assert!(emitted.contains("#[onc_rpc_server::async_trait]"));
     assert!(emitted.contains(
-        "async fn blob_copy(&self, argument: crate::blob_service_basic::copy_request_t) -> Result<crate::transfer_types::job_result_t, onc_rpc_server::DispatchError>;"
+        "async fn blob_copy(&self, request: &onc_rpc_server::RequestContext, argument: crate::blob_service_basic::copy_request_t) -> Result<crate::transfer_types::job_result_t, onc_rpc_server::DispatchError>;"
     ));
     assert!(
         emitted.contains("impl<T> onc_rpc_server::AsyncDispatch for BLOB_SERVICE_V1Dispatch<T>")
     );
-    assert!(emitted.contains("let response = self.inner.blob_copy(argument).await?;"));
+    assert!(emitted.contains("let response = self.inner.blob_copy(&request, argument).await?;"));
     assert!(emitted.contains(
         "<crate::blob_service_basic::copy_request_t as onc_rpc_xdr::XdrDecode>::from_xdr_bytes(&request.payload)"
     ));
