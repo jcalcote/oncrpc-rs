@@ -19,6 +19,18 @@ union payload_t switch (int kind) {
         void nothing;
 };
 
+enum mode_t {
+    MODE_A = 1,
+    MODE_B = 2
+};
+
+union enum_payload_t switch (mode_t mode) {
+    case MODE_A:
+        int value;
+    default:
+        void nothing;
+};
+
 typedef enum {
     VALUE_ONE = 1,
     VALUE_TWO = 2

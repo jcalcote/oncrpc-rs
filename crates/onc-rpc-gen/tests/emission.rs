@@ -93,6 +93,10 @@ fn emission_covers_remaining_rfc4506_constructs() {
     assert!(emitted.contains("Case2 {"));
     assert!(emitted.contains("Case3 {"));
     assert!(emitted.contains("Default {"));
+    assert!(emitted.contains("pub enum enum_payload_t {"));
+    assert!(emitted.contains("discriminant: i32,"));
+    assert!(emitted.contains("let discriminant = <i32 as XdrDecode>::decode_xdr(input)?;"));
+    assert!(emitted.contains("value if value == mode_t::MODE_A as i32 => Ok(Self::ModeA {"));
     assert!(emitted.contains("pub enum inline_enum_t {"));
     assert!(emitted.contains("impl XdrEncode for payload_t {"));
     assert!(emitted.contains("impl XdrDecode for payload_t {"));
@@ -149,7 +153,9 @@ default:
     assert!(emitted.contains("self.r#where.encode_xdr(output)?;"));
     assert!(emitted.contains("true => Ok(Self::True {"));
     assert!(emitted.contains("false => Ok(Self::False)"));
-    assert!(emitted.contains("mode_t::MODE_A => Ok(Self::ModeA {"));
+    assert!(emitted.contains("Self::Default { discriminant } => {"));
+    assert!(emitted.contains("let discriminant = <i32 as XdrDecode>::decode_xdr(input)?;"));
+    assert!(emitted.contains("value if value == mode_t::MODE_A as i32 => Ok(Self::ModeA {"));
 }
 
 fn assert_snapshot(fixture_path: &str, expected_path: &str) {

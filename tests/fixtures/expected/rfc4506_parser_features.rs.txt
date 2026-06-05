@@ -87,6 +87,65 @@ impl XdrDecode for payload_t {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(i32)]
+pub enum mode_t {
+    MODE_A = 1,
+    MODE_B = 2,
+}
+
+impl XdrEncode for mode_t {
+    fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {
+        (*self as i32).encode_xdr(output)
+    }
+}
+
+impl XdrDecode for mode_t {
+    fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+        match i32::decode_xdr(input)? {
+            1 => Ok(Self::MODE_A),
+            2 => Ok(Self::MODE_B),
+            other => Err(onc_rpc_xdr::XdrError::InvalidEnum(other)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum enum_payload_t {
+    ModeA {
+        value: i32,
+    },
+    Default {
+        discriminant: i32,
+    },
+}
+
+impl XdrEncode for enum_payload_t {
+    fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {
+        match self {
+            Self::ModeA { value } => {
+                (mode_t::MODE_A).encode_xdr(output)?;
+                value.encode_xdr(output)?;
+                Ok(())
+            }
+            Self::Default { discriminant } => {
+                discriminant.encode_xdr(output)?;
+                Ok(())
+            }
+        }
+    }
+}
+
+impl XdrDecode for enum_payload_t {
+    fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+        let discriminant = <i32 as XdrDecode>::decode_xdr(input)?;
+        match discriminant {
+            value if value == mode_t::MODE_A as i32 => Ok(Self::ModeA { value: <i32 as XdrDecode>::decode_xdr(input)? }),
+            discriminant => Ok(Self::Default { discriminant }),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(i32)]
 pub enum inline_enum_t {
     VALUE_ONE = 1,
     VALUE_TWO = 2,
