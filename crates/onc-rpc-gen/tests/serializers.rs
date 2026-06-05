@@ -95,6 +95,22 @@ fn generated_union_and_optional_round_trip() {
     let encoded = default_payload.to_xdr_bytes().expect("encode");
     let decoded = rfc4506_parser_features::payload_t::from_xdr_bytes(&encoded).expect("decode");
     assert_eq!(decoded, default_payload);
+
+    let enum_payload = rfc4506_parser_features::enum_payload_t::ModeA { value: 42 };
+    let encoded = enum_payload.to_xdr_bytes().expect("encode enum case");
+    assert_eq!(&encoded[..], &[0, 0, 0, 1, 0, 0, 0, 42]);
+    let decoded = rfc4506_parser_features::enum_payload_t::from_xdr_bytes(&encoded)
+        .expect("decode enum case");
+    assert_eq!(decoded, enum_payload);
+
+    let default_enum_payload = rfc4506_parser_features::enum_payload_t::Default { discriminant: 0 };
+    let encoded = default_enum_payload
+        .to_xdr_bytes()
+        .expect("encode enum default");
+    assert_eq!(&encoded[..], &[0, 0, 0, 0]);
+    let decoded = rfc4506_parser_features::enum_payload_t::from_xdr_bytes(&encoded)
+        .expect("decode enum default");
+    assert_eq!(decoded, default_enum_payload);
 }
 
 #[test]

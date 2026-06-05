@@ -131,7 +131,30 @@ fn parser_supports_remaining_rfc4506_constructs() {
         [UnionCaseLabel::Default]
     ));
 
-    let Item::Typedef(typedef_decl) = &schema.items[6] else {
+    let Item::Enum(enum_decl) = &schema.items[6] else {
+        panic!("expected enum item");
+    };
+    assert_eq!(enum_decl.name, "mode_t");
+
+    let Item::Union(enum_union_decl) = &schema.items[7] else {
+        panic!("expected enum union item");
+    };
+    assert_eq!(enum_union_decl.name, "enum_payload_t");
+    assert_eq!(enum_union_decl.body.discriminant.declarator.name, "mode");
+    assert!(matches!(
+        enum_union_decl.body.discriminant.type_spec,
+        TypeSpec::Identifier(ref name) if name == "mode_t"
+    ));
+    assert!(matches!(
+        enum_union_decl.body.arms[0].labels.as_slice(),
+        [UnionCaseLabel::Case(ValueExpr::Identifier(name))] if name == "MODE_A"
+    ));
+    assert!(matches!(
+        enum_union_decl.body.arms[1].labels.as_slice(),
+        [UnionCaseLabel::Default]
+    ));
+
+    let Item::Typedef(typedef_decl) = &schema.items[8] else {
         panic!("expected typedef item");
     };
     assert!(matches!(typedef_decl.target, TypeSpec::Enum(_)));

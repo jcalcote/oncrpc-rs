@@ -1308,6 +1308,8 @@ impl TypeEmitter {
             &format!("{name}_discriminant"),
             indent,
         )?;
+        let default_discriminant_type =
+            self.union_default_discriminant_type(&body.discriminant.type_spec, &discriminant_type);
         line(indent, &mut self.out, format_args!("pub enum {} {{", name));
         for arm in &body.arms {
             let hint = format!("{}_{}", name, arm.declaration.declarator.name);
@@ -1328,7 +1330,7 @@ impl TypeEmitter {
                     line(
                         indent + 8,
                         &mut self.out,
-                        format_args!("discriminant: {},", discriminant_type),
+                        format_args!("discriminant: {},", default_discriminant_type),
                     );
                     if rust_type != "()" {
                         line(
@@ -1733,6 +1735,8 @@ impl TypeEmitter {
         discriminant_type: &str,
         indent: usize,
     ) -> Result<(), GeneratorError> {
+        let decode_discriminant_type = self.union_decode_discriminant_type(body, discriminant_type);
+        let decode_uses_raw_enum = decode_discriminant_type != discriminant_type;
         line(
             indent,
             &mut self.out,
@@ -1850,7 +1854,7 @@ impl TypeEmitter {
             &mut self.out,
             format_args!(
                 "let discriminant = <{} as XdrDecode>::decode_xdr(input)?;",
-                discriminant_type
+                decode_discriminant_type
             ),
         );
         line(
@@ -1874,7 +1878,11 @@ impl TypeEmitter {
                 continue;
             }
             for label in &arm.labels {
-                let disc = self.render_union_label(label, &body.discriminant.type_spec);
+                let disc = self.render_union_decode_label(
+                    label,
+                    &body.discriminant.type_spec,
+                    decode_uses_raw_enum,
+                );
                 let variant_name = union_variant_name(label);
                 if rust_type == "()" {
                     line(
@@ -2078,6 +2086,68 @@ impl TypeEmitter {
             UnionCaseLabel::Case(value) => self.render_value(value),
             UnionCaseLabel::Default => "discriminant".to_string(),
         }
+    }
+
+    fn render_union_decode_label(
+        &self,
+        label: &UnionCaseLabel,
+        discriminant_type: &TypeSpec,
+        raw_enum_discriminant: bool,
+    ) -> String {
+        if !raw_enum_discriminant {
+            return self.render_union_label(label, discriminant_type);
+        }
+
+        match label {
+            UnionCaseLabel::Case(ValueExpr::Identifier(name)) => {
+                let Some(enum_name) = self.enum_type_name_for(discriminant_type) else {
+                    return self.render_value(&ValueExpr::Identifier(name.clone()));
+                };
+                format!(
+                    "value if value == {}::{} as i32",
+                    self.qualify_type_name(enum_name),
+                    rust_ident(name)
+                )
+            }
+            UnionCaseLabel::Case(value) => self.render_value(value),
+            UnionCaseLabel::Default => "discriminant".to_string(),
+        }
+    }
+
+    fn union_decode_discriminant_type<'a>(
+        &self,
+        body: &UnionBody,
+        discriminant_type: &'a str,
+    ) -> &'a str {
+        if self.union_has_default_arm(body)
+            && self
+                .enum_type_name_for(&body.discriminant.type_spec)
+                .is_some()
+        {
+            "i32"
+        } else {
+            discriminant_type
+        }
+    }
+
+    fn union_default_discriminant_type<'a>(
+        &self,
+        discriminant_type_spec: &TypeSpec,
+        discriminant_type: &'a str,
+    ) -> &'a str {
+        if self.enum_type_name_for(discriminant_type_spec).is_some() {
+            "i32"
+        } else {
+            discriminant_type
+        }
+    }
+
+    fn union_has_default_arm(&self, body: &UnionBody) -> bool {
+        body.arms.iter().any(|arm| {
+            arm.labels
+                .iter()
+                .any(|label| matches!(label, UnionCaseLabel::Default))
+        })
     }
 
     fn enum_type_name_for<'a>(&'a self, discriminant_type: &'a TypeSpec) -> Option<&'a str> {
