@@ -16,7 +16,7 @@ async-trait.workspace = true
 bytes.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
-onc-rpc-runtime = { version = "0.2.0", path = "../onc-rpc-runtime" }
-onc-rpc-server = { version = "0.2.0", path = "../onc-rpc-server" }
-onc-rpc-wire = { version = "0.2.0", path = "../onc-rpc-wire" }
-onc-rpc-xdr = { version = "0.2.0", path = "../onc-rpc-xdr" }
+onc-rpc-runtime = { version = "0.2.1", path = "../onc-rpc-runtime" }
+onc-rpc-server = { version = "0.2.1", path = "../onc-rpc-server" }
+onc-rpc-wire = { version = "0.2.1", path = "../onc-rpc-wire" }
+onc-rpc-xdr = { version = "0.2.1", path = "../onc-rpc-xdr" }
