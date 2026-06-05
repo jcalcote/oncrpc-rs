@@ -26,10 +26,10 @@ thiserror.workspace = true
 assert_cmd = "2.0"
 async-trait.workspace = true
 bytes.workspace = true
-onc-rpc-auth = { version = "0.2.0", path = "../onc-rpc-auth" }
-onc-rpc-runtime = { version = "0.2.0", path = "../onc-rpc-runtime" }
-onc-rpc-server = { version = "0.2.0", path = "../onc-rpc-server" }
-onc-rpc-xdr = { version = "0.2.0", path = "../onc-rpc-xdr" }
+onc-rpc-auth = { version = "0.2.1", path = "../onc-rpc-auth" }
+onc-rpc-runtime = { version = "0.2.1", path = "../onc-rpc-runtime" }
+onc-rpc-server = { version = "0.2.1", path = "../onc-rpc-server" }
+onc-rpc-xdr = { version = "0.2.1", path = "../onc-rpc-xdr" }
 predicates = "3.1"
 tempfile = "3.23"
 tokio.workspace = true
