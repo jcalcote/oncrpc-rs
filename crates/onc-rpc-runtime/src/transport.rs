@@ -1,15 +1,12 @@
 use crate::{
-    AsyncClientTransport, CallOptions, ClientConfig, ClientTransport, RpcMessage, RuntimeError,
-    Xid, decode_rpc_message_datagram, encode_rpc_message_datagram, try_decode_message_from_buffer,
-    write_rpc_message,
+    AsyncClientTransport, CallOptions, ClientConfig, ClientTransport, OwnedRpcTransport,
+    RpcMessage, RuntimeError, Xid, decode_rpc_message_datagram, encode_rpc_message_datagram,
 };
 use async_trait::async_trait;
-use bytes::BytesMut;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::{Arc, Mutex as StdMutex, mpsc};
-use tokio::io::AsyncReadExt;
-use tokio::net::{TcpSocket, TcpStream, UdpSocket, tcp::OwnedReadHalf, tcp::OwnedWriteHalf};
+use tokio::net::UdpSocket;
 use tokio::sync::{Mutex, oneshot};
 use tokio::time::timeout;
 
@@ -17,10 +14,7 @@ type PendingMap = Arc<Mutex<HashMap<Xid, oneshot::Sender<Result<RpcMessage, Runt
 
 #[derive(Clone)]
 pub struct TokioAsyncClientTransport {
-    writer: Arc<Mutex<OwnedWriteHalf>>,
-    pending: PendingMap,
-    default_call_timeout: Option<std::time::Duration>,
-    write_timeout: Option<std::time::Duration>,
+    inner: OwnedRpcTransport,
 }
 
 #[derive(Clone)]
@@ -45,42 +39,18 @@ pub struct TokioUdpClientTransport {
 
 impl TokioAsyncClientTransport {
     pub async fn connect(config: &ClientConfig) -> Result<Self, RuntimeError> {
-        let socket = socket_for_remote(config.remote_addr)?;
-        if let Some(local_addr) = config.local_addr {
-            socket
-                .bind(local_addr)
-                .map_err(|err| RuntimeError::Transport(err.to_string()))?;
-        }
-
-        let stream = timeout(config.connect_timeout, socket.connect(config.remote_addr))
-            .await
-            .map_err(|_| {
-                RuntimeError::Transport(format!(
-                    "connect timeout after {:?}",
-                    config.connect_timeout
-                ))
-            })?
-            .map_err(|err| RuntimeError::Transport(err.to_string()))?;
-
-        Self::from_stream_with_timeouts(stream, config.default_call_timeout, config.write_timeout)
-    }
-
-    fn from_stream_with_timeouts(
-        stream: TcpStream,
-        default_call_timeout: Option<std::time::Duration>,
-        write_timeout: Option<std::time::Duration>,
-    ) -> Result<Self, RuntimeError> {
-        let (reader, writer) = stream.into_split();
-        let pending = Arc::new(Mutex::new(HashMap::new()));
-
-        tokio::spawn(reader_task(reader, pending.clone()));
-
         Ok(Self {
-            writer: Arc::new(Mutex::new(writer)),
-            pending,
-            default_call_timeout,
-            write_timeout,
+            inner: OwnedRpcTransport::connect(config).await?,
         })
+    }
+    pub fn close(&self) {
+        self.inner.close();
+    }
+    pub fn is_closed(&self) -> bool {
+        self.inner.is_closed()
+    }
+    pub async fn wait_closed(&self) {
+        self.inner.wait_closed().await;
     }
 }
 
@@ -185,38 +155,14 @@ impl Drop for OwnedRuntime {
 #[async_trait]
 impl AsyncClientTransport for TokioAsyncClientTransport {
     async fn call(&self, request: RpcMessage) -> Result<RpcMessage, RuntimeError> {
-        self.call_with_options(request, &CallOptions::default())
-            .await
+        self.inner.call(request).await
     }
-
     async fn call_with_options(
         &self,
         request: RpcMessage,
         options: &CallOptions,
     ) -> Result<RpcMessage, RuntimeError> {
-        let xid = request.xid;
-        let (tx, rx) = oneshot::channel();
-        self.pending.lock().await.insert(xid, tx);
-
-        let write_future = async {
-            let mut writer = self.writer.lock().await;
-            write_rpc_message(&mut *writer, &request).await
-        };
-        let write_result = match self.write_timeout {
-            Some(timeout_duration) => {
-                timeout(timeout_duration, write_future).await.map_err(|_| {
-                    RuntimeError::Transport(format!("write timeout after {:?}", timeout_duration))
-                })?
-            }
-            None => write_future.await,
-        };
-
-        if let Err(error) = write_result {
-            self.pending.lock().await.remove(&xid);
-            return Err(error);
-        }
-
-        await_reply(&self.pending, xid, rx, options, self.default_call_timeout).await
+        self.inner.call_with_options(request, options).await
     }
 }
 
@@ -337,13 +283,6 @@ async fn send_udp_request(
         .map_err(|error| RuntimeError::Transport(error.to_string()))
 }
 
-async fn reader_task(mut reader: OwnedReadHalf, pending: PendingMap) {
-    let result = reader_loop(&mut reader, pending.clone()).await;
-    if let Err(error) = result {
-        fail_pending(&pending, error).await;
-    }
-}
-
 async fn udp_reader_task(socket: Arc<UdpSocket>, pending: PendingMap) {
     let result = udp_reader_loop(socket, pending.clone()).await;
     if let Err(error) = result {
@@ -355,27 +294,6 @@ async fn fail_pending(pending: &PendingMap, error: RuntimeError) {
     let mut pending = pending.lock().await;
     for (_, sender) in pending.drain() {
         let _ = sender.send(Err(error.clone()));
-    }
-}
-
-async fn reader_loop(reader: &mut OwnedReadHalf, pending: PendingMap) -> Result<(), RuntimeError> {
-    let mut buffer = BytesMut::with_capacity(8192);
-
-    loop {
-        while let Some(message) = try_decode_message_from_buffer(&mut buffer)? {
-            let xid = message.xid;
-            if let Some(sender) = pending.lock().await.remove(&xid) {
-                let _ = sender.send(Ok(message));
-            }
-        }
-
-        let read = reader
-            .read_buf(&mut buffer)
-            .await
-            .map_err(|err| RuntimeError::Transport(err.to_string()))?;
-        if read == 0 {
-            return Err(RuntimeError::ConnectionClosed);
-        }
     }
 }
 
@@ -399,17 +317,6 @@ async fn udp_reader_loop(socket: Arc<UdpSocket>, pending: PendingMap) -> Result<
         let xid = message.xid;
         if let Some(sender) = pending.lock().await.remove(&xid) {
             let _ = sender.send(Ok(message));
-        }
-    }
-}
-
-fn socket_for_remote(remote_addr: std::net::SocketAddr) -> Result<TcpSocket, RuntimeError> {
-    match remote_addr {
-        std::net::SocketAddr::V4(_) => {
-            TcpSocket::new_v4().map_err(|err| RuntimeError::Transport(err.to_string()))
-        }
-        std::net::SocketAddr::V6(_) => {
-            TcpSocket::new_v6().map_err(|err| RuntimeError::Transport(err.to_string()))
         }
     }
 }
