@@ -270,14 +270,17 @@ pub struct AsyncClient<T> {
 }
 
 fn allocate_xid(counter: &AtomicU32) -> Result<Xid, RuntimeError> {
-    counter
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-            current.checked_add(1)
-        })
-        .map(Xid)
-        .map_err(|_| {
+    let mut current = counter.load(Ordering::Relaxed);
+    loop {
+        let next = current.checked_add(1).ok_or_else(|| {
             RuntimeError::Transport("RPC XID space exhausted; replace the client connection".into())
-        })
+        })?;
+        // CAS preserves the 1.85 MSRV without relying on the renamed atomic update API.
+        match counter.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return Ok(Xid(current)),
+            Err(observed) => current = observed,
+        }
+    }
 }
 
 #[cfg(test)]
