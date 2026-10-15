@@ -1,6 +1,8 @@
 //! Minimal client-side ONC RPC contracts for generated stubs.
 
+mod owned;
 mod transport;
+pub use owned::{OwnedRpcTransport, RecordLimits, read_rpc_message, read_rpc_message_with_limits};
 
 pub use async_trait::async_trait;
 use bytes::{Buf, Bytes, BytesMut};
@@ -259,10 +261,87 @@ pub struct Client<T> {
     next_xid: AtomicU32,
 }
 
+/// Shared async client. Its XID allocator never wraps; exhaustion requires a
+/// fresh client and physical connection. Raw transports must not reuse wire XIDs.
 pub struct AsyncClient<T> {
     config: ClientConfig,
     transport: T,
     next_xid: AtomicU32,
+}
+
+fn allocate_xid(counter: &AtomicU32) -> Result<Xid, RuntimeError> {
+    let mut current = counter.load(Ordering::Relaxed);
+    loop {
+        let next = current.checked_add(1).ok_or_else(|| {
+            RuntimeError::Transport("RPC XID space exhausted; replace the client connection".into())
+        })?;
+        // CAS preserves the 1.85 MSRV without relying on the renamed atomic update API.
+        match counter.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return Ok(Xid(current)),
+            Err(observed) => current = observed,
+        }
+    }
+}
+
+#[cfg(test)]
+mod xid_exhaustion_tests {
+    use super::*;
+
+    #[test]
+    fn concurrent_checked_allocations_near_wrap_never_repeat_or_restart() {
+        let counter = std::sync::Arc::new(AtomicU32::new(u32::MAX - 16));
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(32));
+        let threads: Vec<_> = (0..32)
+            .map(|_| {
+                let counter = counter.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    allocate_xid(&counter)
+                })
+            })
+            .collect();
+        let results: Vec<_> = threads
+            .into_iter()
+            .map(|thread| thread.join().unwrap())
+            .collect();
+        let allocated: std::collections::BTreeSet<_> = results
+            .iter()
+            .filter_map(|result| result.as_ref().ok().map(|xid| xid.0))
+            .collect();
+        assert_eq!(allocated, (u32::MAX - 16..u32::MAX).collect());
+        assert_eq!(results.iter().filter(|result| result.is_err()).count(), 16);
+        assert_eq!(counter.load(Ordering::Relaxed), u32::MAX);
+        assert!(allocate_xid(&counter).is_err());
+    }
+
+    struct NeverCalled;
+    #[async_trait]
+    impl AsyncClientTransport for NeverCalled {
+        async fn call(&self, _: RpcMessage) -> Result<RpcMessage, RuntimeError> {
+            panic!("exhausted client must not send a reused XID")
+        }
+    }
+
+    #[tokio::test]
+    async fn exhausted_async_client_refuses_call_before_transport_registration() {
+        let client = AsyncClient::new(
+            ClientConfig::new("127.0.0.1:1".parse().unwrap()),
+            NeverCalled,
+        );
+        client.next_xid.store(u32::MAX, Ordering::Relaxed);
+        let request = CallRequest::new(
+            ProgramVersion {
+                program: 12345,
+                version: 1,
+            },
+            Procedure(1),
+            Bytes::new(),
+        );
+        assert!(
+            matches!(client.call(request).await, Err(RuntimeError::Transport(message)) if message.contains("XID space exhausted"))
+        );
+    }
 }
 
 impl<T> Client<T>
@@ -290,7 +369,7 @@ where
         request: CallRequest,
         options: &CallOptions,
     ) -> Result<CallResponse, RuntimeError> {
-        let xid = Xid(self.next_xid.fetch_add(1, Ordering::Relaxed));
+        let xid = allocate_xid(&self.next_xid)?;
         let wire_request = build_request_message_with_options(&self.config, xid, request, options);
         let reply = self.transport.call_with_options(wire_request, options)?;
         handle_reply(xid, reply)
@@ -353,7 +432,7 @@ where
         request: CallRequest,
         options: &CallOptions,
     ) -> Result<CallResponse, RuntimeError> {
-        let xid = Xid(self.next_xid.fetch_add(1, Ordering::Relaxed));
+        let xid = allocate_xid(&self.next_xid)?;
         let wire_request = build_request_message_with_options(&self.config, xid, request, options);
         let reply = self
             .transport

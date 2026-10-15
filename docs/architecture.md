@@ -92,6 +92,36 @@ datagram transport rather than inheriting TCP record-framing assumptions.
 Optional discovery layers such as `rpcbind` must not shape the core runtime
 abstractions.
 
+Stream clients use `OwnedRpcTransport`, an additive `AsyncClientTransport`
+implementation accepting either TCP via `connect(&ClientConfig)` or an already
+established async byte stream via `from_stream`. Existing
+`TokioAsyncClientTransport` and TLS client connect signatures remain unchanged;
+they delegate call ownership to this same core. Strict RFC 9289 `sunrpc` ALPN
+negotiation remains in `onc-rpc-tls`, outside the generic stream runtime.
+
+The core exposes `is_closed`, synchronous terminal `close`, and asynchronous
+`wait_closed`. A failed generation rejects subsequent calls and fails every
+pending response waiter. Dropping a cache's clone permits borrowed operations
+to finish; dropping the last owner aborts the weakly owned reader and releases
+the stream. Explicit close also wakes blocked writers. A complete RPC frame's
+write lock is released before response waiting, permitting concurrent calls
+and out-of-order replies on one connection.
+
+Effective call deadlines cover writer acquisition, frame writing, and response
+waiting. Cancellation or timeout during a frame write makes that stream
+terminal; cancellation while waiting for the writer or for a reply removes
+only the canceled registration. Late replies to canceled calls are ignored.
+Both synchronous and asynchronous clients use a checked atomic XID allocator
+that never wraps; exhaustion requires replacement of client and connection.
+Raw transport users must not deliberately reuse an XID on one connection.
+
+Default record assembly limits are 128 MiB including record markers and 1,024
+fragments. `RecordLimits`, `from_stream_with_limits`, and
+`read_rpc_message_with_limits` allow explicit tighter or larger bounds. Fragment
+sizes and total assembly bounds are checked before payload allocation. These
+are generic resource limits, not limits imposed by an application protocol.
+This stream ownership change does not alter UDP's datagram lifecycle policy.
+
 UDP transport should also avoid embedding hidden retransmission policy into the
 core runtime. In practice that means:
 
@@ -166,6 +196,16 @@ practice that means:
 
 Owns optional TLS and STARTTLS integration points. This crate should wrap the
 runtime layer rather than redefine it.
+
+TCP connection, STARTTLS probe (when used), and TLS handshake share one
+`ClientConfig::connect_timeout` budget. A silent peer cannot retain provisional
+setup indefinitely. STARTTLS replies use the bounded runtime record reader and
+must match the probe XID, accepted SUCCESS, an AUTH_NONE verifier containing
+exactly `STARTTLS`, and an empty success payload. The client still requires
+negotiated `sunrpc` ALPN; application-specific compatibility exceptions belong
+in the consuming application's negotiation adapter, not in this strict layer.
+After negotiation, TLS and STARTTLS clients use the same owned stream lifecycle
+as TCP clients.
 
 ### `onc-rpc-gen`
 

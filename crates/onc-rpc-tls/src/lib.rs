@@ -4,13 +4,13 @@ use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
 use onc_rpc_runtime::{
     AcceptedReply, AcceptedStatus, AsyncClientTransport, AuthStat, CallOptions, ClientConfig,
-    ClientTransport, MessageBody, OpaqueAuth, Procedure, ProgramVersion, RejectedReply, ReplyBody,
-    RpcMessage, RuntimeError, Xid, try_decode_message_from_buffer, write_rpc_message,
+    ClientTransport, MessageBody, OpaqueAuth, OwnedRpcTransport, Procedure, ProgramVersion,
+    RecordLimits, RejectedReply, ReplyBody, RpcMessage, RuntimeError, Xid,
+    read_rpc_message_with_limits, try_decode_message_from_buffer, write_rpc_message,
 };
 use onc_rpc_server::{AsyncServer, Server, ServerError, ServerTransportError};
 use onc_rpc_wire::AuthFlavor;
 use rustls::pki_types::ServerName;
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex as StdMutex, mpsc};
 use thiserror::Error;
@@ -24,8 +24,12 @@ use tokio_rustls::{TlsAcceptor, TlsConnector};
 const AUTH_TLS_VALUE: u32 = 7;
 const SUNRPC_ALPN: &[u8] = b"sunrpc";
 const STARTTLS_TOKEN: &[u8; 8] = b"STARTTLS";
-
-type PendingMap = Arc<Mutex<HashMap<Xid, oneshot::Sender<Result<RpcMessage, RuntimeError>>>>>;
+// A STARTTLS NULL reply has no application payload. Leave room for the full
+// RPC auth envelope and fragmentation without the generic 128 MiB buffer.
+const STARTTLS_PROBE_LIMITS: RecordLimits = RecordLimits {
+    max_record_bytes: 4096,
+    max_fragments: 16,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TlsMode {
@@ -90,10 +94,7 @@ pub enum TlsError {
 
 #[derive(Clone)]
 pub struct TokioAsyncTlsClientTransport {
-    writer: Arc<Mutex<tokio::io::WriteHalf<tokio_rustls::client::TlsStream<TcpStream>>>>,
-    pending: PendingMap,
-    default_call_timeout: Option<std::time::Duration>,
-    write_timeout: Option<std::time::Duration>,
+    inner: OwnedRpcTransport,
 }
 
 pub struct TokioTlsClientTransport {
@@ -104,10 +105,7 @@ pub struct TokioTlsClientTransport {
 
 #[derive(Clone)]
 pub struct TokioAsyncStartTlsClientTransport {
-    writer: Arc<Mutex<tokio::io::WriteHalf<tokio_rustls::client::TlsStream<TcpStream>>>>,
-    pending: PendingMap,
-    default_call_timeout: Option<std::time::Duration>,
-    write_timeout: Option<std::time::Duration>,
+    inner: OwnedRpcTransport,
 }
 
 pub struct TokioStartTlsClientTransport {
@@ -155,19 +153,30 @@ pub struct TokioAsyncStartTlsServerTransport {
 }
 
 impl TokioAsyncTlsClientTransport {
+    pub fn close(&self) {
+        self.inner.close();
+    }
+    pub fn is_closed(&self) -> bool {
+        self.inner.is_closed()
+    }
+    pub async fn wait_closed(&self) {
+        self.inner.wait_closed().await;
+    }
+
     pub async fn connect(config: &ClientConfig, tls: &ClientTlsConfig) -> Result<Self, TlsError> {
-        let stream = tcp_connect(config).await?;
-        let connector = TlsConnector::from(tls.tls_config.clone());
-        let tls_stream = connector
-            .connect(tls.server_name.clone(), stream)
-            .await
-            .map_err(|err| TlsError::Handshake(err.to_string()))?;
-        validate_client_alpn(&tls_stream)?;
-        Ok(from_tls_stream(
-            tls_stream,
-            config.default_call_timeout,
-            config.write_timeout,
-        ))
+        setup_with_timeout(config, async {
+            let stream = tcp_connect(config).await?;
+            let connector = TlsConnector::from(tls.tls_config.clone());
+            let tls_stream = connector
+                .connect(tls.server_name.clone(), stream)
+                .await
+                .map_err(|err| TlsError::Handshake(err.to_string()))?;
+            validate_client_alpn(&tls_stream)?;
+            Ok(Self {
+                inner: OwnedRpcTransport::from_stream(tls_stream, config)?,
+            })
+        })
+        .await
     }
 }
 
@@ -186,24 +195,35 @@ impl TokioTlsClientTransport {
 }
 
 impl TokioAsyncStartTlsClientTransport {
+    pub fn close(&self) {
+        self.inner.close();
+    }
+    pub fn is_closed(&self) -> bool {
+        self.inner.is_closed()
+    }
+    pub async fn wait_closed(&self) {
+        self.inner.wait_closed().await;
+    }
+
     pub async fn connect(
         config: &ClientConfig,
         tls: &ClientTlsConfig,
         program: ProgramVersion,
     ) -> Result<Self, TlsError> {
-        let mut stream = tcp_connect(config).await?;
-        perform_starttls_probe(&mut stream, program).await?;
-        let connector = TlsConnector::from(tls.tls_config.clone());
-        let tls_stream = connector
-            .connect(tls.server_name.clone(), stream)
-            .await
-            .map_err(|err| TlsError::Handshake(err.to_string()))?;
-        validate_client_alpn(&tls_stream)?;
-        Ok(from_starttls_stream(
-            tls_stream,
-            config.default_call_timeout,
-            config.write_timeout,
-        ))
+        setup_with_timeout(config, async {
+            let mut stream = tcp_connect(config).await?;
+            perform_starttls_probe(&mut stream, program).await?;
+            let connector = TlsConnector::from(tls.tls_config.clone());
+            let tls_stream = connector
+                .connect(tls.server_name.clone(), stream)
+                .await
+                .map_err(|err| TlsError::Handshake(err.to_string()))?;
+            validate_client_alpn(&tls_stream)?;
+            Ok(Self {
+                inner: OwnedRpcTransport::from_stream(tls_stream, config)?,
+            })
+        })
+        .await
     }
 }
 
@@ -515,31 +535,14 @@ impl TokioAsyncStartTlsServerTransport {
 #[async_trait]
 impl AsyncClientTransport for TokioAsyncTlsClientTransport {
     async fn call(&self, request: RpcMessage) -> Result<RpcMessage, RuntimeError> {
-        async_call(
-            self.writer.clone(),
-            self.pending.clone(),
-            self.write_timeout,
-            self.default_call_timeout,
-            request,
-            &CallOptions::default(),
-        )
-        .await
+        self.inner.call(request).await
     }
-
     async fn call_with_options(
         &self,
         request: RpcMessage,
         options: &CallOptions,
     ) -> Result<RpcMessage, RuntimeError> {
-        async_call(
-            self.writer.clone(),
-            self.pending.clone(),
-            self.write_timeout,
-            self.default_call_timeout,
-            request,
-            options,
-        )
-        .await
+        self.inner.call_with_options(request, options).await
     }
 }
 
@@ -566,31 +569,14 @@ impl ClientTransport for TokioTlsClientTransport {
 #[async_trait]
 impl AsyncClientTransport for TokioAsyncStartTlsClientTransport {
     async fn call(&self, request: RpcMessage) -> Result<RpcMessage, RuntimeError> {
-        async_call(
-            self.writer.clone(),
-            self.pending.clone(),
-            self.write_timeout,
-            self.default_call_timeout,
-            request,
-            &CallOptions::default(),
-        )
-        .await
+        self.inner.call(request).await
     }
-
     async fn call_with_options(
         &self,
         request: RpcMessage,
         options: &CallOptions,
     ) -> Result<RpcMessage, RuntimeError> {
-        async_call(
-            self.writer.clone(),
-            self.pending.clone(),
-            self.write_timeout,
-            self.default_call_timeout,
-            request,
-            options,
-        )
-        .await
+        self.inner.call_with_options(request, options).await
     }
 }
 
@@ -614,36 +600,16 @@ impl ClientTransport for TokioStartTlsClientTransport {
     }
 }
 
-fn from_tls_stream(
-    stream: tokio_rustls::client::TlsStream<TcpStream>,
-    default_call_timeout: Option<std::time::Duration>,
-    write_timeout: Option<std::time::Duration>,
-) -> TokioAsyncTlsClientTransport {
-    let (reader, writer) = tokio::io::split(stream);
-    let pending = Arc::new(Mutex::new(HashMap::new()));
-    tokio::spawn(reader_task(reader, pending.clone()));
-    TokioAsyncTlsClientTransport {
-        writer: Arc::new(Mutex::new(writer)),
-        pending,
-        default_call_timeout,
-        write_timeout,
-    }
-}
-
-fn from_starttls_stream(
-    stream: tokio_rustls::client::TlsStream<TcpStream>,
-    default_call_timeout: Option<std::time::Duration>,
-    write_timeout: Option<std::time::Duration>,
-) -> TokioAsyncStartTlsClientTransport {
-    let (reader, writer) = tokio::io::split(stream);
-    let pending = Arc::new(Mutex::new(HashMap::new()));
-    tokio::spawn(reader_task(reader, pending.clone()));
-    TokioAsyncStartTlsClientTransport {
-        writer: Arc::new(Mutex::new(writer)),
-        pending,
-        default_call_timeout,
-        write_timeout,
-    }
+async fn setup_with_timeout<T>(
+    config: &ClientConfig,
+    setup: impl std::future::Future<Output = Result<T, TlsError>>,
+) -> Result<T, TlsError> {
+    timeout(config.connect_timeout, setup).await.map_err(|_| {
+        TlsError::Runtime(RuntimeError::Transport(format!(
+            "TLS setup timeout after {:?}",
+            config.connect_timeout
+        )))
+    })?
 }
 
 async fn tcp_connect(config: &ClientConfig) -> Result<TcpStream, RuntimeError> {
@@ -702,84 +668,33 @@ async fn perform_starttls_probe(
     };
     write_rpc_message(stream, &request).await?;
 
-    let mut buffer = BytesMut::with_capacity(1024);
-    loop {
-        if let Some(reply) = try_decode_message_from_buffer(&mut buffer)? {
-            return validate_starttls_reply(reply);
-        }
-        let read = stream
-            .read_buf(&mut buffer)
-            .await
-            .map_err(|err| RuntimeError::Transport(err.to_string()))?;
-        if read == 0 {
-            return Err(TlsError::StartTlsRejected);
-        }
-    }
+    let reply = read_rpc_message_with_limits(stream, STARTTLS_PROBE_LIMITS)
+        .await
+        .map_err(|error| match error {
+            RuntimeError::ConnectionClosed => TlsError::StartTlsRejected,
+            error => TlsError::Runtime(error),
+        })?;
+    validate_starttls_reply(reply, request.xid)
 }
 
-fn validate_starttls_reply(reply: RpcMessage) -> Result<(), TlsError> {
+fn validate_starttls_reply(reply: RpcMessage, expected_xid: Xid) -> Result<(), TlsError> {
+    if reply.xid != expected_xid {
+        return Err(TlsError::InvalidStartTlsReply);
+    }
     match reply.body {
         MessageBody::Reply(ReplyBody::Accepted(AcceptedReply {
             verifier,
-            status: AcceptedStatus::Success(_),
-        })) if verifier.flavor == AuthFlavor::None && verifier.body.as_ref() == STARTTLS_TOKEN => {
+            status: AcceptedStatus::Success(payload),
+        })) if verifier.flavor == AuthFlavor::None
+            && verifier.body.as_ref() == STARTTLS_TOKEN
+            && payload.is_empty() =>
+        {
             Ok(())
         }
         MessageBody::Reply(ReplyBody::Denied(RejectedReply::AuthError(_))) => {
             Err(TlsError::StartTlsRejected)
         }
         _ => Err(TlsError::InvalidStartTlsReply),
-    }
-}
-
-async fn async_call<W>(
-    writer: Arc<Mutex<W>>,
-    pending: PendingMap,
-    write_timeout: Option<std::time::Duration>,
-    default_call_timeout: Option<std::time::Duration>,
-    request: RpcMessage,
-    options: &CallOptions,
-) -> Result<RpcMessage, RuntimeError>
-where
-    W: AsyncWrite + Unpin + Send + 'static,
-{
-    let xid = request.xid;
-    let (tx, rx) = oneshot::channel();
-    pending.lock().await.insert(xid, tx);
-
-    let write_future = async {
-        let mut writer = writer.lock().await;
-        write_rpc_message(&mut *writer, &request).await
-    };
-    let write_result = match write_timeout {
-        Some(timeout_duration) => timeout(timeout_duration, write_future).await.map_err(|_| {
-            RuntimeError::Transport(format!("write timeout after {:?}", timeout_duration))
-        })?,
-        None => write_future.await,
-    };
-
-    if let Err(error) = write_result {
-        pending.lock().await.remove(&xid);
-        return Err(error);
-    }
-
-    let reply_result = match options.effective_timeout(default_call_timeout) {
-        Some(timeout_duration) => match timeout(timeout_duration, rx).await {
-            Ok(result) => result,
-            Err(_) => {
-                pending.lock().await.remove(&xid);
-                return Err(RuntimeError::Transport(format!(
-                    "call timeout after {:?}",
-                    timeout_duration
-                )));
-            }
-        },
-        None => rx.await,
-    };
-
-    match reply_result {
-        Ok(result) => result,
-        Err(_) => Err(RuntimeError::ConnectionClosed),
     }
 }
 
@@ -800,43 +715,6 @@ where
         let _ = tx.send(inner.call_with_options(request, &options).await);
     });
     rx.recv().map_err(|_| RuntimeError::ConnectionClosed)?
-}
-
-async fn reader_task<R>(mut reader: R, pending: PendingMap)
-where
-    R: AsyncRead + Unpin,
-{
-    let result = reader_loop(&mut reader, pending.clone()).await;
-    if let Err(error) = result {
-        let mut pending = pending.lock().await;
-        for (_, sender) in pending.drain() {
-            let _ = sender.send(Err(error.clone()));
-        }
-    }
-}
-
-async fn reader_loop<R>(reader: &mut R, pending: PendingMap) -> Result<(), RuntimeError>
-where
-    R: AsyncRead + Unpin,
-{
-    let mut buffer = BytesMut::with_capacity(8192);
-
-    loop {
-        while let Some(message) = try_decode_message_from_buffer(&mut buffer)? {
-            let xid = message.xid;
-            if let Some(sender) = pending.lock().await.remove(&xid) {
-                let _ = sender.send(Ok(message));
-            }
-        }
-
-        let read = reader
-            .read_buf(&mut buffer)
-            .await
-            .map_err(|err| RuntimeError::Transport(err.to_string()))?;
-        if read == 0 {
-            return Err(RuntimeError::ConnectionClosed);
-        }
-    }
 }
 
 async fn serve_sync_connection<S>(
@@ -1301,6 +1179,8 @@ mod tests {
     use onc_rpc_xdr::{XdrDecode, XdrEncode};
     use rcgen::generate_simple_self_signed;
     use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+    use std::time::Duration;
+    use tokio::io::AsyncWriteExt;
     use tokio::task::JoinHandle;
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1373,6 +1253,360 @@ mod tests {
             ),
             ServerTlsConfig::new(server),
         )
+    }
+
+    async fn setup_client(
+        config: ClientConfig,
+        tls: ClientTlsConfig,
+        starttls: bool,
+    ) -> Result<(), TlsError> {
+        if starttls {
+            TokioAsyncStartTlsClientTransport::connect(&config, &tls, test_program())
+                .await
+                .map(|_| ())
+        } else {
+            TokioAsyncTlsClientTransport::connect(&config, &tls)
+                .await
+                .map(|_| ())
+        }
+    }
+
+    async fn receive_probe(stream: &mut TcpStream) -> Xid {
+        let request = onc_rpc_runtime::read_rpc_message(stream).await.unwrap();
+        let MessageBody::Call(call) = request.body else {
+            panic!("expected STARTTLS NULL call")
+        };
+        assert_eq!(call.program, test_program());
+        assert_eq!(call.procedure, Procedure(0));
+        assert_eq!(call.credentials.flavor.number(), AUTH_TLS_VALUE);
+        assert!(call.credentials.body.is_empty());
+        assert_eq!(call.verifier, OpaqueAuth::none());
+        assert!(call.payload.is_empty());
+        request.xid
+    }
+
+    fn probe_reply(xid: Xid, verifier: OpaqueAuth, payload: Bytes) -> RpcMessage {
+        RpcMessage {
+            xid,
+            body: MessageBody::Reply(ReplyBody::Accepted(AcceptedReply {
+                verifier,
+                status: AcceptedStatus::Success(payload),
+            })),
+        }
+    }
+
+    fn starttls_verifier() -> OpaqueAuth {
+        OpaqueAuth::new(AuthFlavor::None, Bytes::from_static(STARTTLS_TOKEN)).unwrap()
+    }
+
+    async fn accept_probe(stream: &mut TcpStream) {
+        let xid = receive_probe(stream).await;
+        write_rpc_message(stream, &probe_reply(xid, starttls_verifier(), Bytes::new()))
+            .await
+            .unwrap();
+    }
+
+    async fn receive_client_hello(stream: &mut TcpStream) {
+        let mut header = [0_u8; 5];
+        stream.read_exact(&mut header).await.unwrap();
+        assert_eq!(header[0], 22, "expected a TLS handshake record");
+        let mut body = vec![0; usize::from(u16::from_be_bytes([header[3], header[4]]))];
+        stream.read_exact(&mut body).await.unwrap();
+        assert_eq!(body.first(), Some(&1), "expected ClientHello");
+    }
+
+    async fn peer_closed(stream: &mut TcpStream) {
+        let mut remaining = Vec::new();
+        stream.read_to_end(&mut remaining).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn tls_and_starttls_silent_handshake_expire_and_release_socket() {
+        for starttls in [false, true] {
+            let (client_tls, _) = tls_configs();
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let config = ClientConfig::new(listener.local_addr().unwrap())
+                .with_connect_timeout(Duration::from_secs(60));
+            let (entered, received) = oneshot::channel();
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                if starttls {
+                    accept_probe(&mut stream).await;
+                }
+                receive_client_hello(&mut stream).await;
+                entered.send(()).unwrap();
+                peer_closed(&mut stream).await;
+            });
+            let pending = tokio::spawn(setup_client(config, client_tls, starttls));
+            timeout(Duration::from_secs(5), received)
+                .await
+                .unwrap()
+                .unwrap();
+            // Establish real TCP/ClientHello readiness before pausing time.
+            tokio::time::pause();
+            tokio::time::advance(Duration::from_secs(60)).await;
+            let result = timeout(Duration::from_secs(1), pending)
+                .await
+                .expect("handshake exceeded the aggregate setup budget")
+                .unwrap();
+            tokio::time::resume();
+            assert!(
+                matches!(result, Err(TlsError::Runtime(RuntimeError::Transport(detail)))
+                if detail.contains("TLS setup timeout"))
+            );
+            timeout(Duration::from_secs(5), server)
+                .await
+                .unwrap()
+                .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn silent_starttls_probe_expires_without_sending_client_hello() {
+        let (client_tls, _) = tls_configs();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let config = ClientConfig::new(listener.local_addr().unwrap())
+            .with_connect_timeout(Duration::from_secs(60));
+        let (entered, received) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            receive_probe(&mut stream).await;
+            entered.send(()).unwrap();
+            let mut next = [0_u8; 1];
+            assert_eq!(stream.read(&mut next).await.unwrap(), 0);
+        });
+        let pending = tokio::spawn(setup_client(config, client_tls, true));
+        timeout(Duration::from_secs(5), received)
+            .await
+            .unwrap()
+            .unwrap();
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(60)).await;
+        let result = timeout(Duration::from_secs(1), pending)
+            .await
+            .expect("silent probe exceeded the setup budget")
+            .unwrap();
+        tokio::time::resume();
+        assert!(
+            matches!(result, Err(TlsError::Runtime(RuntimeError::Transport(detail)))
+            if detail.contains("TLS setup timeout"))
+        );
+        timeout(Duration::from_secs(5), server)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn starttls_probe_and_handshake_share_one_setup_deadline() {
+        let (client_tls, _) = tls_configs();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let config = ClientConfig::new(listener.local_addr().unwrap())
+            .with_connect_timeout(Duration::from_secs(60));
+        let (entered, received) = oneshot::channel();
+        let (release, released) = oneshot::channel();
+        let (hello, hello_received) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let xid = receive_probe(&mut stream).await;
+            entered.send(()).unwrap();
+            released.await.unwrap();
+            write_rpc_message(
+                &mut stream,
+                &probe_reply(xid, starttls_verifier(), Bytes::new()),
+            )
+            .await
+            .unwrap();
+            receive_client_hello(&mut stream).await;
+            hello.send(()).unwrap();
+            peer_closed(&mut stream).await;
+        });
+        let pending = tokio::spawn(setup_client(config, client_tls, true));
+        timeout(Duration::from_secs(5), received)
+            .await
+            .unwrap()
+            .unwrap();
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(40)).await;
+        tokio::time::resume();
+        release.send(()).unwrap();
+        timeout(Duration::from_secs(5), hello_received)
+            .await
+            .unwrap()
+            .unwrap();
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(20)).await;
+        let result = timeout(Duration::from_secs(1), pending)
+            .await
+            .expect("TLS handshake incorrectly received a new setup budget")
+            .unwrap();
+        tokio::time::resume();
+        assert!(
+            matches!(result, Err(TlsError::Runtime(RuntimeError::Transport(detail)))
+            if detail.contains("TLS setup timeout"))
+        );
+        timeout(Duration::from_secs(5), server)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn malformed_starttls_replies_never_reach_tls_handshake() {
+        let (client_tls, _) = tls_configs();
+        for (xid, verifier, payload) in [
+            (Xid(2), starttls_verifier(), Bytes::new()),
+            (
+                Xid(1),
+                OpaqueAuth::new(AuthFlavor::Unknown(99), Bytes::from_static(STARTTLS_TOKEN))
+                    .unwrap(),
+                Bytes::new(),
+            ),
+            (
+                Xid(1),
+                OpaqueAuth::new(AuthFlavor::None, Bytes::from_static(b"STARTTLX")).unwrap(),
+                Bytes::new(),
+            ),
+            (
+                Xid(1),
+                starttls_verifier(),
+                Bytes::from_static(&[0, 0, 0, 0]),
+            ),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let config = ClientConfig::new(listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                assert_eq!(receive_probe(&mut stream).await, Xid(1));
+                write_rpc_message(&mut stream, &probe_reply(xid, verifier, payload))
+                    .await
+                    .unwrap();
+                let mut next = [0_u8; 1];
+                assert_eq!(
+                    stream.read(&mut next).await.unwrap(),
+                    0,
+                    "invalid STARTTLS reply was followed by TLS traffic"
+                );
+            });
+            assert!(matches!(
+                timeout(
+                    Duration::from_secs(5),
+                    setup_client(config, client_tls.clone(), true)
+                )
+                .await
+                .unwrap(),
+                Err(TlsError::InvalidStartTlsReply)
+            ));
+            timeout(Duration::from_secs(5), server)
+                .await
+                .unwrap()
+                .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn oversized_or_excessively_fragmented_probe_fails_without_payload_wait() {
+        let (client_tls, _) = tls_configs();
+        let oversized = (0x8000_0000_u32 | STARTTLS_PROBE_LIMITS.max_record_bytes as u32)
+            .to_be_bytes()
+            .to_vec();
+        let fragments = vec![0_u8; STARTTLS_PROBE_LIMITS.max_fragments * 4];
+        for record in [oversized, fragments] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let config = ClientConfig::new(listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                receive_probe(&mut stream).await;
+                stream.write_all(&record).await.unwrap();
+                let mut next = [0_u8; 1];
+                assert_eq!(stream.read(&mut next).await.unwrap(), 0);
+            });
+            assert!(matches!(
+                timeout(
+                    Duration::from_secs(5),
+                    setup_client(config, client_tls.clone(), true)
+                )
+                .await
+                .unwrap(),
+                Err(TlsError::Runtime(RuntimeError::Transport(_)))
+            ));
+            timeout(Duration::from_secs(5), server)
+                .await
+                .unwrap()
+                .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn fragmented_valid_probe_enters_strict_sunrpc_tls() {
+        let (client_tls, server_tls) = tls_configs();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let config = ClientConfig::new(listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let xid = receive_probe(&mut stream).await;
+            let payload = probe_reply(xid, starttls_verifier(), Bytes::new())
+                .encode()
+                .unwrap();
+            stream.write_all(&4_u32.to_be_bytes()).await.unwrap();
+            stream.write_all(&payload[..4]).await.unwrap();
+            stream
+                .write_all(&(0x8000_0000_u32 | (payload.len() - 4) as u32).to_be_bytes())
+                .await
+                .unwrap();
+            stream.write_all(&payload[4..]).await.unwrap();
+            let tls = TlsAcceptor::from(server_tls.tls_config)
+                .accept(stream)
+                .await
+                .unwrap();
+            assert_eq!(tls.get_ref().1.alpn_protocol(), Some(SUNRPC_ALPN));
+        });
+        timeout(
+            Duration::from_secs(5),
+            setup_client(config, client_tls, true),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        timeout(Duration::from_secs(5), server)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn tls_and_starttls_still_reject_absent_sunrpc_alpn() {
+        for starttls in [false, true] {
+            let (client_tls, server_tls) = tls_configs();
+            let mut server_config = (*server_tls.tls_config).clone();
+            server_config.alpn_protocols.clear();
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let config = ClientConfig::new(listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                if starttls {
+                    accept_probe(&mut stream).await;
+                }
+                let tls = TlsAcceptor::from(Arc::new(server_config))
+                    .accept(stream)
+                    .await
+                    .unwrap();
+                assert!(tls.get_ref().1.alpn_protocol().is_none());
+            });
+            assert!(matches!(
+                timeout(
+                    Duration::from_secs(5),
+                    setup_client(config, client_tls, starttls)
+                )
+                .await
+                .unwrap(),
+                Err(TlsError::MissingSunrpcAlpn)
+            ));
+            timeout(Duration::from_secs(5), server)
+                .await
+                .unwrap()
+                .unwrap();
+        }
     }
 
     #[tokio::test(flavor = "multi_thread")]
