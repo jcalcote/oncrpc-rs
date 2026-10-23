@@ -23,3 +23,22 @@ jobs:
         run: cargo test --workspace
       - name: cargo check
         run: cargo check --workspace
+      - name: owned-buffer and admission example
+        run: cargo run -p owned-buffers-example
+      - name: API documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --no-deps
+
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.85.0
+      - uses: Swatinem/rust-cache@v2
+      - name: library workspace on minimum Rust
+        run: cargo check --workspace
+      - name: runtime contracts on minimum Rust
+        run: cargo test -p onc-rpc-runtime
+      - name: owned-buffer example on minimum Rust
+        run: cargo run -p owned-buffers-example

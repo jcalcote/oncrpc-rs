@@ -112,6 +112,6 @@ The first compatibility bar should be the active `.x` files used by current
 consumers. As the project grows, add broader fixtures only after preserving
 that baseline.
 
-When running the real-corpus generator test outside a workstation that has a
-checked-out sibling `datasphere` repo, set `ONC_RPCGEN_REAL_XDR_DIR` to point
-at the external `.x` corpus explicitly.
+The optional external-corpus generator test accepts any consumer-provided `.x`
+corpus. Set `ONC_RPCGEN_REAL_XDR_DIR` to its directory. The committed fixtures and
+ordinary CI do not require an external repository.

@@ -314,3 +314,62 @@ async fn custom_record_limits_fail_before_accepting_oversized_payload() {
         .is_err()
     );
 }
+
+#[tokio::test]
+async fn pending_sender_waker_can_reenter_connection_cleanup_without_registry_lock() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    struct Reentrant {
+        state: Weak<State>,
+        unlocked: AtomicBool,
+    }
+    impl std::task::Wake for Reentrant {
+        fn wake(self: Arc<Self>) {
+            self.wake_by_ref();
+        }
+        fn wake_by_ref(self: &Arc<Self>) {
+            let state = self.state.upgrade().unwrap();
+            let unlocked = state.replies.try_lock().is_ok();
+            self.unlocked.store(unlocked, Ordering::SeqCst);
+            if unlocked {
+                state.fail(RuntimeError::ConnectionClosed);
+            }
+        }
+    }
+    let (stream, _peer) = duplex(128);
+    let transport = test_transport(stream, None, None);
+    let token = Arc::new(());
+    let permit = Arc::new(transport.state.admission.try_acquire(128).unwrap());
+    let (sender, receiver) = oneshot::channel();
+    transport.state.replies().pending.insert(
+        Xid(99),
+        Pending {
+            token: token.clone(),
+            sender: Some(ResponseSender::Buffered { sender, permit }),
+        },
+    );
+    let pending = PendingCall {
+        retain_reply: false,
+        state: transport.state.clone(),
+        xid: Xid(99),
+        token,
+    };
+    let signal = Arc::new(Reentrant {
+        state: Arc::downgrade(&transport.state),
+        unlocked: AtomicBool::new(false),
+    });
+    let waker = std::task::Waker::from(signal.clone());
+    let mut context = std::task::Context::from_waker(&waker);
+    let mut receiver = Box::pin(receiver);
+    assert!(receiver.as_mut().poll(&mut context).is_pending());
+    drop(pending);
+    assert!(
+        signal.unlocked.load(Ordering::SeqCst),
+        "sender destruction invoked a waker under the reply registry lock"
+    );
+    assert!(
+        transport.is_closed(),
+        "the waker reentered connection cleanup"
+    );
+    assert!(receiver.await.is_err());
+    assert_eq!(transport.admission_snapshot().calls, 0);
+}

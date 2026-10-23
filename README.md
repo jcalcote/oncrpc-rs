@@ -71,6 +71,8 @@ and broader runtime features beyond the current typed sync/async generation
 contract.
 
 See [docs/architecture.md](docs/architecture.md) for the current crate-boundary and code-generation direction.
+See [docs/owned-buffers.md](docs/owned-buffers.md) for the additive 0.2.3 caller-owned
+receive and segmented-send API, cancellation ownership and migration guidance.
 See [docs/codegen.md](docs/codegen.md) for fixture layout, output policy, and generator testing expectations.
 
 ## Minimal Example
@@ -179,6 +181,29 @@ standard RPC TCP port.
 This TLS support currently applies to the TCP transport path. DTLS is not part
 of the current implementation.
 
+## Caller-owned buffers
+
+The additive 0.2.3 API offers `OwnedRpcTransport::call_into` for result receivers
+that parse small application headers and then select caller-owned data slices.
+`ReceiveOutcome` returns the original receiver after the final library access,
+on success or failure. `call_segmented` is the fixed-segment convenience API.
+
+Run the self-contained [owned-buffer example](examples/owned-buffers/src/main.rs):
+
+```bash
+cargo run -p owned-buffers-example
+```
+
+It uses an in-memory RPC echo peer, sends owned segments, receives directly into
+the original data allocation and demonstrates ownership recovery after failure.
+No external service is required. The example also configures per-connection
+`AdmissionLimits`, handles typed refusal from `try_call_into`, and retries the
+returned owners after capacity becomes available. Congestion never closes the
+connection automatically. Existing constructors retain compatibility-mode
+admission; explicit limited constructors apply the shared budget to legacy and
+owned-receiver calls alike. See [the ownership contract](docs/owned-buffers.md)
+for cancellation, deadlines, migration and ordinary kernel/TLS copy boundaries.
+
 ## Third-Party Dependencies
 
 Current Rust dependencies are intentionally small:
@@ -209,6 +234,12 @@ push to `main`:
 - `cargo clippy --workspace --all-targets -- -D warnings`
 - `cargo test --workspace`
 - `cargo check --workspace`
+- the owned-buffer/admission example and warning-free API documentation
+
+A separate minimum-Rust job checks the library workspace, runtime contract tests
+and standalone example on Rust 1.85.0. Full workspace tests use current stable
+Rust because certificate-generation test dependencies can require a newer
+compiler than the libraries themselves.
 
 Tag pushes matching `v*` trigger a release workflow that:
 

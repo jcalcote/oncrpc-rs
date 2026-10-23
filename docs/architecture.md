@@ -139,8 +139,9 @@ the protocol shape allows it. In practice that means:
 - prefer reusable read buffers over repeated allocation
 - avoid reconstructing payload buffers when a borrowed or sliced view is
   sufficient
-- accept bounded assembly buffering where ONC RPC TCP fragmentation makes it
-  unavoidable, but do not introduce extra copies beyond that requirement
+- retain bounded assembly buffering for legacy owned-message APIs; the optional
+  caller-owned receive path streams across record fragments directly into its
+  destinations without full-record assembly
 
 Runtime transport should also treat throughput and concurrency as first-class
 requirements. In practice that means:
@@ -163,6 +164,13 @@ requirements. In practice that means:
   that call, or provide a call-specific duration
 - auth policy should be explicit at both the client-default and per-call
   levels, with ergonomic helpers for `AUTH_NONE` and `AUTH_SYS`
+
+Explicit per-connection admission can bound accepted client calls and their
+logical request/descriptor/inline-owner charge. Admission refusal is observable
+before sending and returns ownership to the caller; the runtime does not queue
+refused payloads or decide retry/closure policy for congestion. Existing
+constructors preserve compatibility-mode admission. Details and lifetime
+boundaries are in [Caller-owned RPC buffers](owned-buffers.md).
 
 ### `onc-rpc-server`
 
@@ -317,6 +325,13 @@ That should influence API and implementation choices in practical ways:
   outputs
 
 ## Buffer Ownership Constraint
+
+The additive 0.2.3 caller-owned buffer API is specified in
+[Caller-owned RPC buffers](owned-buffers.md). It separates bounded RPC envelope
+parsing from direct result placement and preserves outstanding destination
+ownership through cancellation and late replies. Existing generated and legacy
+transport APIs keep their existing buffer representations.
+
 
 Transport and serialization code should prefer zero-copy or minimal-copy data
 flow by default.

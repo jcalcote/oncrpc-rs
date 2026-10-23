@@ -2,6 +2,11 @@
 //!
 //! One physical stream multiplexes replies by XID. Failed or explicitly closed
 //! generations are terminal; dropping the final owner aborts the weak reader.
+use crate::admission::{Admission, AdmissionPermit};
+use crate::{AdmissionError, AdmissionLimits, AdmissionSnapshot};
+mod segmented;
+pub use segmented::{CallRefusal, ReceiveOutcome, ReplyReceiver, SegmentedReply, SegmentedRequest};
+
 #[cfg(test)]
 use crate::{AcceptedReply, AcceptedStatus, OpaqueAuth, Procedure, ProgramVersion, ReplyBody};
 use crate::{
@@ -63,11 +68,28 @@ pub struct OwnedRpcTransport {
 }
 
 type Writer = Box<dyn AsyncWrite + Send + Unpin>;
-type ResponseSender = oneshot::Sender<Result<RpcMessage, RuntimeError>>;
+enum ResponseSender {
+    Buffered {
+        sender: oneshot::Sender<Result<RpcMessage, RuntimeError>>,
+        permit: Arc<AdmissionPermit>,
+    },
+    Segmented(Box<dyn segmented::ReceiveTarget>),
+}
+impl ResponseSender {
+    fn fail(self, error: RuntimeError) {
+        match self {
+            Self::Buffered { sender, permit } => {
+                let _ = sender.send(Err(error));
+                drop(permit);
+            }
+            Self::Segmented(target) => target.finish(Err(error)),
+        }
+    }
+}
 
 struct Pending {
     token: Arc<()>,
-    sender: ResponseSender,
+    sender: Option<ResponseSender>,
 }
 
 #[derive(Default)]
@@ -77,6 +99,7 @@ struct Replies {
 }
 
 struct State {
+    admission: Admission,
     writer: Mutex<Option<Writer>>,
     replies: StdMutex<Replies>,
     reader: OnceLock<AbortHandle>,
@@ -99,8 +122,11 @@ impl State {
             replies.closed = Some(error.clone());
             std::mem::take(&mut replies.pending)
         };
+        self.admission.close();
         for (_, pending) in pending {
-            let _ = pending.sender.send(Err(error.clone()));
+            if let Some(sender) = pending.sender {
+                sender.fail(error.clone());
+            }
         }
         self.closed.notify_waiters();
     }
@@ -121,6 +147,7 @@ impl Drop for State {
 }
 
 struct PendingCall {
+    retain_reply: bool,
     state: Arc<State>,
     xid: Xid,
     token: Arc<()>,
@@ -128,14 +155,22 @@ struct PendingCall {
 
 impl Drop for PendingCall {
     fn drop(&mut self) {
-        let mut replies = self.state.replies();
-        if replies
-            .pending
-            .get(&self.xid)
-            .is_some_and(|pending| Arc::ptr_eq(&pending.token, &self.token))
-        {
-            replies.pending.remove(&self.xid);
+        if self.retain_reply {
+            return;
         }
+        let removed = {
+            let mut replies = self.state.replies();
+            if replies.pending.get(&self.xid).is_some_and(|pending| {
+                Arc::ptr_eq(&pending.token, &self.token) && pending.sender.is_some()
+            }) {
+                replies.pending.remove(&self.xid)
+            } else {
+                None
+            }
+        };
+        // Sender destruction may invoke a custom waker or destroy an application
+        // owner. Neither is allowed to run while the reply registry is locked.
+        drop(removed);
     }
 }
 
@@ -162,8 +197,28 @@ impl Drop for FrameWrite<'_> {
 }
 
 impl OwnedRpcTransport {
-    /// Connect a plaintext RPC socket and start its owned multiplexed reader.
+    /// Connect using compatibility-mode admission (no configured call/byte limit).
     pub async fn connect(config: &ClientConfig) -> Result<Self, RuntimeError> {
+        Self::from_stream(Self::connect_stream(config).await?, config)
+    }
+
+    /// Connect with explicit per-connection admission limits.
+    /// Existing client APIs share these limits with owned-receiver calls.
+    pub async fn connect_with_admission(
+        config: &ClientConfig,
+        limits: AdmissionLimits,
+    ) -> Result<Self, RuntimeError> {
+        let admission =
+            Admission::new(limits).map_err(|e| RuntimeError::Transport(e.to_string()))?;
+        Self::from_stream_using_admission(
+            Self::connect_stream(config).await?,
+            config,
+            RecordLimits::default(),
+            admission,
+        )
+    }
+
+    async fn connect_stream(config: &ClientConfig) -> Result<tokio::net::TcpStream, RuntimeError> {
         let socket = if config.remote_addr.is_ipv4() {
             TcpSocket::new_v4()
         } else {
@@ -184,7 +239,31 @@ impl OwnedRpcTransport {
                 ))
             })?
             .map_err(|error| RuntimeError::Transport(error.to_string()))?;
-        Self::from_stream(stream, config)
+        Ok(stream)
+    }
+
+    /// Observe accepted calls and charged request bytes on this connection.
+    pub fn admission_snapshot(&self) -> AdmissionSnapshot {
+        self.state.admission.snapshot()
+    }
+
+    /// Wait for capacity without transferring a request or reserving it.
+    /// Another caller may win admission first; retry `try_call_into` or `try_call`.
+    pub async fn wait_for_capacity(&self, required_bytes: usize) -> Result<(), AdmissionError> {
+        self.state.admission.wait_for_capacity(required_bytes).await
+    }
+
+    fn admission_error(&self, reason: AdmissionError) -> RuntimeError {
+        match reason {
+            AdmissionError::InvalidRequest(error) => error,
+            AdmissionError::Closed => self
+                .state
+                .replies()
+                .closed
+                .clone()
+                .unwrap_or(RuntimeError::ConnectionClosed),
+            other => RuntimeError::Transport(other.to_string()),
+        }
     }
 
     /// Mark this generation terminal, fail pending calls, and interrupt its IO.
@@ -231,9 +310,39 @@ impl OwnedRpcTransport {
     where
         S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
     {
+        Self::from_stream_using_admission(stream, config, limits, Admission::unlimited())
+    }
+
+    /// Own a stream with explicit incoming-record and pre-send admission limits.
+    /// No payload queue is created for refused calls. Existing constructors keep
+    /// compatibility-mode admission; use this constructor to enable bounds.
+    pub fn from_stream_with_admission<S>(
+        stream: S,
+        config: &ClientConfig,
+        records: RecordLimits,
+        admission: AdmissionLimits,
+    ) -> Result<Self, RuntimeError>
+    where
+        S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
+    {
+        let admission =
+            Admission::new(admission).map_err(|e| RuntimeError::Transport(e.to_string()))?;
+        Self::from_stream_using_admission(stream, config, records, admission)
+    }
+
+    fn from_stream_using_admission<S>(
+        stream: S,
+        config: &ClientConfig,
+        limits: RecordLimits,
+        admission: Admission,
+    ) -> Result<Self, RuntimeError>
+    where
+        S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
+    {
         limits.validate()?;
         let (reader, writer) = tokio::io::split(stream);
         let state = Arc::new(State {
+            admission,
             writer: Mutex::new(Some(Box::new(writer))),
             replies: StdMutex::new(Replies::default()),
             reader: OnceLock::new(),
@@ -291,17 +400,75 @@ impl AsyncClientTransport for OwnedRpcTransport {
         request: RpcMessage,
         options: &CallOptions,
     ) -> Result<RpcMessage, RuntimeError> {
-        match options.effective_timeout(self.default_call_timeout) {
-            Some(duration) => timeout(duration, self.call_inner(request))
-                .await
-                .map_err(|_| RuntimeError::Transport(format!("call timeout after {duration:?}")))?,
-            None => self.call_inner(request).await,
+        match self.try_call(request, options) {
+            Ok(call) => call.await,
+            Err(refusal) => Err(self.admission_error(refusal.reason)),
         }
     }
 }
 
 impl OwnedRpcTransport {
-    async fn call_inner(&self, request: RpcMessage) -> Result<RpcMessage, RuntimeError> {
+    /// Try to admit a classic owned-message call before registration or writing.
+    /// Refusal returns the original message and a typed reason; nothing was sent.
+    /// Dropping the admitted, unpolled future releases its capacity. Deadlines
+    /// start when it is polled. Existing `call` methods expose refusal as a
+    /// `RuntimeError` without extending that enum or changing generated signatures.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Returning original owners inline avoids allocating merely to reject a call"
+    )]
+    pub fn try_call(
+        &self,
+        request: RpcMessage,
+        options: &CallOptions,
+    ) -> Result<
+        impl std::future::Future<Output = Result<RpcMessage, RuntimeError>> + Send + 'static + use<>,
+        CallRefusal<RpcMessage>,
+    > {
+        let bytes = match message_admission_bytes(&request) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                return Err(CallRefusal {
+                    reason: AdmissionError::InvalidRequest(error),
+                    request,
+                    receiver: (),
+                    required_bytes: 0,
+                });
+            }
+        };
+        let permit = match self.state.admission.try_acquire(bytes) {
+            Ok(permit) => permit,
+            Err(reason) => {
+                return Err(CallRefusal {
+                    reason,
+                    request,
+                    receiver: (),
+                    required_bytes: bytes,
+                });
+            }
+        };
+        let permit = Arc::new(permit);
+        let completion_permit = Arc::clone(&permit);
+        let transport = self.clone();
+        let options = options.clone();
+        Ok(async move {
+            let call = transport.call_inner_admitted(request, permit);
+            let result = match options.effective_timeout(transport.default_call_timeout) {
+                Some(duration) => timeout(duration, call).await.map_err(|_| {
+                    RuntimeError::Transport(format!("call timeout after {duration:?}"))
+                })?,
+                None => call.await,
+            };
+            drop(completion_permit);
+            result
+        })
+    }
+
+    async fn call_inner_admitted(
+        &self,
+        request: RpcMessage,
+        permit: Arc<AdmissionPermit>,
+    ) -> Result<RpcMessage, RuntimeError> {
         let (sender, receiver) = oneshot::channel();
         let token = Arc::new(());
         {
@@ -318,11 +485,12 @@ impl OwnedRpcTransport {
                 request.xid,
                 Pending {
                     token: token.clone(),
-                    sender,
+                    sender: Some(ResponseSender::Buffered { sender, permit }),
                 },
             );
         }
         let _pending = PendingCall {
+            retain_reply: false,
             state: self.state.clone(),
             xid: request.xid,
             token,
@@ -335,8 +503,45 @@ impl OwnedRpcTransport {
                 })??,
             None => self.write(&request).await?,
         }
-        // Release the writer before awaiting the reply: requests are multiplexed.
+        // Release input owners and the writer before awaiting the reply.
+        drop(request);
         receiver.await.map_err(|_| RuntimeError::ConnectionClosed)?
+    }
+}
+
+// Calculate charge using only a bounded envelope encode. Never coalesce the
+// request payload merely to decide whether it can be admitted.
+fn message_admission_bytes(message: &RpcMessage) -> Result<usize, RuntimeError> {
+    let mut header = message.clone();
+    let payload = match &mut header.body {
+        MessageBody::Call(call) => std::mem::take(&mut call.payload).len(),
+        MessageBody::Reply(crate::ReplyBody::Accepted(crate::AcceptedReply {
+            status: crate::AcceptedStatus::Success(bytes),
+            ..
+        })) => std::mem::take(bytes).len(),
+        _ => 0,
+    };
+    header
+        .encode()
+        .map_err(RuntimeError::Wire)?
+        .len()
+        .checked_add(payload)
+        .and_then(|n| n.checked_add(4 + std::mem::size_of::<RpcMessage>()))
+        .ok_or_else(|| RuntimeError::Transport("RPC admission charge overflow".into()))
+}
+
+// A receiver callback or backend panic must not leave a healthy-looking
+// generation whose reader task has disappeared. This weak guard cannot keep an
+// otherwise unused connection alive.
+struct ReaderExit(Weak<State>);
+impl Drop for ReaderExit {
+    fn drop(&mut self) {
+        if let Some(state) = self.0.upgrade() {
+            state.fail(RuntimeError::ConnectionClosed);
+            if let Ok(mut writer) = state.writer.try_lock() {
+                writer.take();
+            }
+        }
     }
 }
 
@@ -345,31 +550,15 @@ async fn reader_loop<R: AsyncRead + Unpin>(
     owner: Weak<State>,
     limits: RecordLimits,
 ) {
+    let _exit = ReaderExit(owner.clone());
     loop {
-        let message = read_rpc_message_with_limits(&mut reader, limits)
-            .await
-            .and_then(|message| {
-                if matches!(message.body, MessageBody::Reply(_)) {
-                    Ok(message)
-                } else {
-                    Err(RuntimeError::UnexpectedCallMessage)
-                }
-            });
-        let Some(state) = owner.upgrade() else {
-            return;
-        };
-        match message {
-            Ok(message) => {
-                let pending = state.replies().pending.remove(&message.xid);
-                if let Some(pending) = pending {
-                    let _ = pending.sender.send(Ok(message));
-                }
-            }
-            Err(error) => {
+        let result = segmented::receive_record(&mut reader, &owner, limits).await;
+        if let Err(error) = result {
+            if let Some(state) = owner.upgrade() {
                 state.fail(error);
                 state.writer.lock().await.take();
-                return;
             }
+            return;
         }
     }
 }

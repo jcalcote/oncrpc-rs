@@ -1,8 +1,14 @@
 //! Minimal client-side ONC RPC contracts for generated stubs.
 
+mod admission;
 mod owned;
+mod record_io;
 mod transport;
-pub use owned::{OwnedRpcTransport, RecordLimits, read_rpc_message, read_rpc_message_with_limits};
+pub use admission::{AdmissionError, AdmissionLimits, AdmissionSnapshot};
+pub use owned::{
+    CallRefusal, OwnedRpcTransport, ReceiveOutcome, RecordLimits, ReplyReceiver, SegmentedReply,
+    SegmentedRequest, read_rpc_message, read_rpc_message_with_limits,
+};
 
 pub use async_trait::async_trait;
 use bytes::{Buf, Bytes, BytesMut};
