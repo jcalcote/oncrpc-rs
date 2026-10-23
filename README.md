@@ -71,6 +71,8 @@ and broader runtime features beyond the current typed sync/async generation
 contract.
 
 See [docs/architecture.md](docs/architecture.md) for the current crate-boundary and code-generation direction.
+See [docs/owned-buffers.md](docs/owned-buffers.md) for the additive 0.2.3 caller-owned
+receive and segmented-send API, cancellation ownership and migration guidance.
 See [docs/codegen.md](docs/codegen.md) for fixture layout, output policy, and generator testing expectations.
 
 ## Minimal Example

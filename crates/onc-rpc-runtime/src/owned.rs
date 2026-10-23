@@ -2,6 +2,9 @@
 //!
 //! One physical stream multiplexes replies by XID. Failed or explicitly closed
 //! generations are terminal; dropping the final owner aborts the weak reader.
+mod segmented;
+pub use segmented::{SegmentedReply, SegmentedRequest};
+
 #[cfg(test)]
 use crate::{AcceptedReply, AcceptedStatus, OpaqueAuth, Procedure, ProgramVersion, ReplyBody};
 use crate::{
@@ -63,11 +66,24 @@ pub struct OwnedRpcTransport {
 }
 
 type Writer = Box<dyn AsyncWrite + Send + Unpin>;
-type ResponseSender = oneshot::Sender<Result<RpcMessage, RuntimeError>>;
+enum ResponseSender {
+    Buffered(oneshot::Sender<Result<RpcMessage, RuntimeError>>),
+    Segmented(Box<dyn segmented::ReceiveTarget>),
+}
+impl ResponseSender {
+    fn fail(self, error: RuntimeError) {
+        match self {
+            Self::Buffered(sender) => {
+                let _ = sender.send(Err(error));
+            }
+            Self::Segmented(target) => target.finish(Err(error), 0),
+        }
+    }
+}
 
 struct Pending {
     token: Arc<()>,
-    sender: ResponseSender,
+    sender: Option<ResponseSender>,
 }
 
 #[derive(Default)]
@@ -100,7 +116,9 @@ impl State {
             std::mem::take(&mut replies.pending)
         };
         for (_, pending) in pending {
-            let _ = pending.sender.send(Err(error.clone()));
+            if let Some(sender) = pending.sender {
+                sender.fail(error.clone());
+            }
         }
         self.closed.notify_waiters();
     }
@@ -121,6 +139,7 @@ impl Drop for State {
 }
 
 struct PendingCall {
+    retain_reply: bool,
     state: Arc<State>,
     xid: Xid,
     token: Arc<()>,
@@ -128,12 +147,13 @@ struct PendingCall {
 
 impl Drop for PendingCall {
     fn drop(&mut self) {
+        if self.retain_reply {
+            return;
+        }
         let mut replies = self.state.replies();
-        if replies
-            .pending
-            .get(&self.xid)
-            .is_some_and(|pending| Arc::ptr_eq(&pending.token, &self.token))
-        {
+        if replies.pending.get(&self.xid).is_some_and(|pending| {
+            Arc::ptr_eq(&pending.token, &self.token) && pending.sender.is_some()
+        }) {
             replies.pending.remove(&self.xid);
         }
     }
@@ -318,11 +338,12 @@ impl OwnedRpcTransport {
                 request.xid,
                 Pending {
                     token: token.clone(),
-                    sender,
+                    sender: Some(ResponseSender::Buffered(sender)),
                 },
             );
         }
         let _pending = PendingCall {
+            retain_reply: false,
             state: self.state.clone(),
             xid: request.xid,
             token,
@@ -346,30 +367,13 @@ async fn reader_loop<R: AsyncRead + Unpin>(
     limits: RecordLimits,
 ) {
     loop {
-        let message = read_rpc_message_with_limits(&mut reader, limits)
-            .await
-            .and_then(|message| {
-                if matches!(message.body, MessageBody::Reply(_)) {
-                    Ok(message)
-                } else {
-                    Err(RuntimeError::UnexpectedCallMessage)
-                }
-            });
-        let Some(state) = owner.upgrade() else {
-            return;
-        };
-        match message {
-            Ok(message) => {
-                let pending = state.replies().pending.remove(&message.xid);
-                if let Some(pending) = pending {
-                    let _ = pending.sender.send(Ok(message));
-                }
-            }
-            Err(error) => {
+        let result = segmented::receive_record(&mut reader, &owner, limits).await;
+        if let Err(error) = result {
+            if let Some(state) = owner.upgrade() {
                 state.fail(error);
                 state.writer.lock().await.take();
-                return;
             }
+            return;
         }
     }
 }
