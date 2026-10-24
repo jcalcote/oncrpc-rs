@@ -1,6 +1,6 @@
 //! Optional caller-owned buffer path; legacy transports keep their API.
 use super::*;
-use crate::record_io::{RecordReader, write_segments};
+use crate::record_io::RecordReader;
 use bytes::{Bytes, BytesMut};
 
 /// A small RPC call envelope followed by immutable owned payload segments.
@@ -133,6 +133,7 @@ struct Target<R> {
     sender: Option<oneshot::Sender<ReceiveOutcome<R>>>,
     payload_len: usize,
     permit: Option<Arc<AdmissionPermit>>,
+    control: Arc<CallControl>,
 }
 impl<R> Target<R> {
     fn deliver(&mut self, result: Result<RpcMessage, RuntimeError>) {
@@ -153,7 +154,7 @@ impl<R> Drop for Target<R> {
     fn drop(&mut self) {
         // Aborting the reader drops its in-flight read borrow before this owner.
         // Return the receiver only at that physical cleanup boundary.
-        self.deliver(Err(RuntimeError::ConnectionClosed));
+        self.deliver(self.control.finish(Err(RuntimeError::ConnectionClosed)));
     }
 }
 impl<R: ReplyReceiver> ReceiveTarget for Target<R> {
@@ -171,7 +172,7 @@ impl<R: ReplyReceiver> ReceiveTarget for Target<R> {
             .advance(bytes)
     }
     fn finish(mut self: Box<Self>, header: Result<RpcMessage, RuntimeError>) {
-        self.deliver(header);
+        self.deliver(self.control.finish(header));
     }
 }
 
@@ -202,9 +203,9 @@ impl<B: AsMut<[u8]> + Send + 'static> ReplyReceiver for Buffers<B> {
 impl OwnedRpcTransport {
     /// Send scatter/gather arguments and receive directly into owned buffers.
     ///
-    /// Dropping a fully sent call leaves its XID and buffers owned by the
-    /// connection until its reply is consumed or the connection is closed.
-    /// Cancellation during a frame write retires the connection. Deadlines
+    /// Dropping a fully sent call abandons the result and detaches its buffers
+    /// after the reader's final access; late replies are drained. Explicit
+    /// cancellation finishes any partial frame before returning. Deadlines
     /// return only after the destination is quiescent; use `call_into` to recover
     /// the original destination on errors as well as success. Dropping the
     /// returned future never exposes storage still accessed by the reader.
@@ -268,12 +269,12 @@ impl OwnedRpcTransport {
     /// of both input owners.
     ///
     /// Every returned outcome contains the original receiver after the final
-    /// library access. A deadline after writing starts retires the connection
-    /// and waits for that receiver to become quiescent. A deadline while queued
-    /// for the writer removes only this unsent call. Dropping this future can
-    /// abandon its result; the reader still retains the receiver until cleanup.
-    /// To cancel and recover ownership, call `close` and continue awaiting this
-    /// future. Receiver callback errors retire the connection.
+    /// library access. Cancellation and deadlines affect only this call, finish
+    /// any partial request frame, and detach the destination after its final
+    /// access. A hard write timeout or dropping during a partial frame can retire
+    /// the connection. To cancel and recover ownership, cancel the CallOptions
+    /// token and continue awaiting this future. Remote execution may continue.
+    /// Receiver callback errors retire the connection.
     pub async fn call_into<R: ReplyReceiver>(
         &self,
         request: SegmentedRequest,
@@ -375,8 +376,8 @@ impl OwnedRpcTransport {
         options: &CallOptions,
         permit: Arc<AdmissionPermit>,
     ) -> ReceiveOutcome<R> {
-        let (sender, mut response) = oneshot::channel();
-        let token = Arc::new(());
+        let (sender, response) = oneshot::channel();
+        let token = Arc::new(CallControl::default());
         {
             let mut replies = self.state.replies();
             let error = replies.closed.clone().or_else(|| {
@@ -401,103 +402,24 @@ impl OwnedRpcTransport {
                         sender: Some(sender),
                         payload_len: 0,
                         permit: Some(permit),
+                        control: token.clone(),
                     }))),
                 },
             );
         }
-        let mut pending = PendingCall {
-            retain_reply: false,
+        let pending = PendingCall {
             state: self.state.clone(),
             xid,
             token,
         };
-        // Keep the completion receiver outside both deadlines. Dropping a timed
-        // operation must never discard the destination's return channel.
-        let operation = async {
-            let write = async {
-                tokio::select! {
-                    biased;
-                    () = self.wait_closed() => Err(self.state.replies().closed.clone().unwrap_or(RuntimeError::ConnectionClosed)),
-                    result = self.write_segmented_frame(&segments) => result,
-                }
-            };
-            match self.write_timeout {
-                Some(duration) => timeout(duration, write).await.map_err(|_| {
-                    RuntimeError::Transport(format!("write timeout after {duration:?}"))
-                })??,
-                None => write.await?,
-            }
-            drop(segments);
-            pending.retain_reply = true;
-            Ok((&mut response)
-                .await
-                .expect("owned receive target must return its owner"))
-        };
-        let result = match options.effective_timeout(self.default_call_timeout) {
-            Some(duration) => timeout(duration, operation).await.unwrap_or_else(|_| {
-                Err(RuntimeError::Transport(format!(
-                    "call timeout after {duration:?}"
-                )))
-            }),
-            None => operation.await,
-        };
-        match result {
-            Ok(outcome) => outcome,
-            Err(error) => {
-                let unsent = if !pending.retain_reply {
-                    let mut replies = self.state.replies();
-                    if replies.pending.get(&xid).is_some_and(|entry| {
-                        Arc::ptr_eq(&entry.token, &pending.token) && entry.sender.is_some()
-                    }) {
-                        replies.pending.remove(&xid).and_then(|entry| entry.sender)
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-                if let Some(target) = unsent {
-                    target.fail(error.clone());
-                } else {
-                    // Includes an active read: abort requests cleanup, and the
-                    // target's Drop returns its owner only once the read stops.
-                    self.close();
-                }
-                let mut outcome = response
-                    .await
-                    .expect("owned receive target must return its owner");
-                outcome.result = Err(error);
-                outcome
-            }
-        }
-    }
-
-    async fn write_segmented_frame(&self, segments: &[Bytes]) -> Result<(), RuntimeError> {
-        let writer = self.state.writer.lock().await;
-        if let Some(error) = self.state.replies().closed.clone() {
-            return Err(error);
-        }
-        let mut frame = FrameWrite {
-            state: &self.state,
-            writer,
-            complete: false,
-        };
-        let writer = frame
-            .writer
-            .as_mut()
-            .ok_or(RuntimeError::ConnectionClosed)?;
-        let result = async {
-            write_segments(writer, segments).await?;
-            tokio::io::AsyncWriteExt::flush(writer)
-                .await
-                .map_err(|error| RuntimeError::Transport(error.to_string()))
-        }
-        .await;
-        match &result {
-            Ok(()) => frame.complete = true,
-            Err(error) => self.state.fail(error.clone()),
-        }
-        result
+        self.complete_call(
+            segments,
+            &pending,
+            &CallWait::new(options, self.default_call_timeout),
+            response,
+        )
+        .await
+        .expect("owned receive target must return its owner after cleanup")
     }
 }
 
@@ -612,7 +534,7 @@ pub(super) async fn receive_record<R: AsyncRead + Unpin>(
     let result = match target {
         Some(ResponseSender::Buffered { sender, permit }) => {
             let mut bytes = BytesMut::from(xid_bytes.as_slice());
-            let result = async {
+            let receive = async {
                 loop {
                     let start = bytes.len();
                     bytes.resize(start + 4096, 0);
@@ -628,15 +550,27 @@ pub(super) async fn receive_record<R: AsyncRead + Unpin>(
                 } else {
                     Err(RuntimeError::UnexpectedCallMessage)
                 }
-            }
-            .await;
+            };
+            let control = token.as_ref().expect("registered reply control");
+            let result = tokio::select! {
+                biased;
+                error = control.stopped() => Err(error),
+                result = receive => result,
+            };
+            let result = control.finish(result);
+            let cancelled = control.error().is_some();
             let failure = result.as_ref().err().cloned();
+            drop(bytes);
             let _ = sender.send(result);
             drop(permit);
-            failure.map_or(Ok(()), Err)
+            if cancelled {
+                drain(&mut record).await.map(|_| ())
+            } else {
+                failure.map_or(Ok(()), Err)
+            }
         }
         Some(ResponseSender::Segmented(mut target)) => {
-            let received: Result<(RpcMessage, usize), RuntimeError> = async {
+            let receive = async {
                 let header = reply_header(&mut record, xid_bytes).await?;
                 let success = matches!(
                     header.body,
@@ -671,8 +605,15 @@ pub(super) async fn receive_record<R: AsyncRead + Unpin>(
                     return Ok((header, usize::MAX));
                 }
                 Ok((header, length))
-            }
-            .await;
+            };
+            let control = token.as_ref().expect("registered reply control");
+            let received = tokio::select! {
+                biased;
+                error = control.stopped() => Err(error),
+                result = receive => result,
+            };
+            let received = control.finish(received);
+            let cancelled = control.error().is_some();
             match received {
                 Ok((header, length)) if length != usize::MAX => {
                     target.finish(Ok(header));
@@ -686,7 +627,11 @@ pub(super) async fn receive_record<R: AsyncRead + Unpin>(
                 }
                 Err(error) => {
                     target.finish(Err(error.clone()));
-                    Err(error)
+                    if cancelled {
+                        drain(&mut record).await.map(|_| ())
+                    } else {
+                        Err(error)
+                    }
                 }
             }
         }

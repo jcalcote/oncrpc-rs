@@ -178,31 +178,26 @@ fn tracked() -> (TrackedBuffer, mpsc::UnboundedReceiver<()>, Arc<AtomicUsize>) {
 }
 
 #[tokio::test]
-async fn cancellation_retains_buffers_and_xid_until_late_reply_is_consumed() {
+async fn dropping_sent_call_releases_buffers_before_late_reply_and_preserves_connection() {
     bounded(async {
         let (transport, mut peer) = transport(128);
-        let (buffer, mut drops, _) = tracked();
+        let (buffer, mut drops, writes) = tracked();
         let options = CallOptions::default();
         let mut call = Box::pin(transport.call_segmented(request(31), vec![buffer], &options));
         held(call.as_mut()).await;
         assert_eq!(read_rpc_message(&mut peer).await.unwrap().xid, Xid(31));
         drop(call);
-        assert!(matches!(
-            drops.try_recv(),
-            Err(mpsc::error::TryRecvError::Empty)
-        ));
-        let error = transport
-            .call_segmented(request(31), vec![vec![0; 8]], &options)
-            .await
-            .expect_err("XID must remain reserved");
-        assert!(error.to_string().contains("duplicate"));
-        write_rpc_message(&mut peer, &reply(31, b"late"))
-            .await
-            .unwrap();
+        // Destination destruction is a readiness event: it must happen before
+        // the peer sends its late response, not be deferred until that response.
         drops
             .recv()
             .await
-            .expect("buffer released after late reply quiesced");
+            .expect("abandoned destination released promptly");
+        let accesses_after_release = writes.load(Ordering::SeqCst);
+        assert!(!transport.is_closed());
+        write_rpc_message(&mut peer, &reply(31, b"late"))
+            .await
+            .unwrap();
         let server = tokio::spawn(async move {
             read_rpc_message(&mut peer).await.unwrap();
             write_rpc_message(&mut peer, &reply(32, b"next"))
@@ -217,13 +212,14 @@ async fn cancellation_retains_buffers_and_xid_until_late_reply_is_consumed() {
                 .buffers[0],
             b"next"
         );
+        assert_eq!(writes.load(Ordering::SeqCst), accesses_after_release);
         server.await.unwrap();
     })
     .await
 }
 
 #[tokio::test]
-async fn cancellation_during_reply_keeps_buffer_until_final_fragment() {
+async fn dropping_during_reply_detaches_buffer_before_remaining_fragments() {
     bounded(async {
         let encoded = reply(41, b"abcdefgh").encode().unwrap();
         let split = encoded.len() - 6;
@@ -248,17 +244,31 @@ async fn cancellation_during_reply_keeps_buffer_until_final_fragment() {
             .await
             .expect("reader consumed the nonfinal fragment");
         drop(call);
-        assert!(matches!(
-            drops.try_recv(),
-            Err(mpsc::error::TryRecvError::Empty)
-        ));
+        drops
+            .recv()
+            .await
+            .expect("active read borrow quiesced before destination drop");
+        let accesses_after_release = writes.load(Ordering::SeqCst);
         peer.write_all(&(0x8000_0000u32 | 6).to_be_bytes())
             .await
             .unwrap();
         peer.write_all(&encoded[split..]).await.unwrap();
-        drops.recv().await.unwrap();
-        assert!(writes.load(Ordering::SeqCst) > 0);
-        assert!(!transport.is_closed());
+        // A subsequent reply is the completion barrier for draining both late
+        // fragments. The abandoned allocation must never be exposed again.
+        let server = tokio::spawn(async move {
+            assert_eq!(read_rpc_message(&mut peer).await.unwrap().xid, Xid(42));
+            write_rpc_message(&mut peer, &reply(42, b"next"))
+                .await
+                .unwrap();
+        });
+        let next = transport
+            .call_segmented(request(42), vec![vec![0; 4]], &options)
+            .await
+            .unwrap();
+        assert_eq!(next.buffers[0], b"next");
+        assert!(accesses_after_release > 0);
+        assert_eq!(writes.load(Ordering::SeqCst), accesses_after_release);
+        server.await.unwrap();
     })
     .await
 }
@@ -521,7 +531,7 @@ async fn canceling_a_partial_segmented_write_retires_the_connection() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn reply_timeout_retires_connection_and_quiesces_receive_storage() {
+async fn reply_timeout_quiesces_storage_and_preserves_connection() {
     let (transport, mut peer) = transport(128);
     let (buffer, mut drops, _) = tracked();
     let options = CallOptions::default().with_timeout(Duration::from_secs(5));
@@ -529,14 +539,31 @@ async fn reply_timeout_retires_connection_and_quiesces_receive_storage() {
     held(call.as_mut()).await;
     read_rpc_message(&mut peer).await.unwrap();
     tokio::time::advance(Duration::from_secs(5)).await;
-    assert!(
-        call.await
-            .expect_err("deadline expired")
-            .to_string()
-            .contains("call timeout")
+    assert_eq!(
+        call.await.expect_err("deadline expired"),
+        onc_rpc_runtime::RuntimeError::CallTimeout {
+            duration: Duration::from_secs(5)
+        }
     );
-    assert!(transport.is_closed());
+    assert!(!transport.is_closed());
     drops.recv().await.unwrap();
+    // No reply was needed to release the old destination. Drain it now and
+    // demonstrate that another call still succeeds on the same stream.
+    write_rpc_message(&mut peer, &reply(131, b"late"))
+        .await
+        .unwrap();
+    let server = tokio::spawn(async move {
+        assert_eq!(read_rpc_message(&mut peer).await.unwrap().xid, Xid(132));
+        write_rpc_message(&mut peer, &reply(132, b"next"))
+            .await
+            .unwrap();
+    });
+    let next = transport
+        .call_segmented(request(132), vec![vec![0; 4]], &CallOptions::default())
+        .await
+        .unwrap();
+    assert_eq!(next.buffers[0], b"next");
+    server.await.unwrap();
 }
 
 #[tokio::test]

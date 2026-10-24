@@ -15,6 +15,8 @@ pub mod time_service {
                     Self { client }
                 }
 
+                /// Call RPC `GET_TIME` and decode its typed reply.
+                /// Blocks until completion using the client's default call policy.
                 pub fn get_time(&self) -> Result<crate::time_service::time_string, onc_rpc_runtime::RuntimeError> {
                     self.client.call_typed(
                         onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION },
@@ -23,6 +25,8 @@ pub mod time_service {
                     )
                 }
 
+                /// Call RPC `GET_TIME` with explicit call options.
+                /// Options select timeout, authentication and local cancellation policy.
                 pub fn get_time_with_options(&self, options: &onc_rpc_runtime::CallOptions) -> Result<crate::time_service::time_string, onc_rpc_runtime::RuntimeError> {
                     self.client.call_typed_with_options(
                         onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION },
@@ -46,6 +50,8 @@ pub mod time_service {
                     Self { client }
                 }
 
+                /// Call RPC `GET_TIME` and decode its typed reply.
+                /// Awaits completion using the client's default call policy.
                 pub async fn get_time(&self) -> Result<crate::time_service::time_string, onc_rpc_runtime::RuntimeError> {
                     self.client.call_typed(
                         onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION },
@@ -54,6 +60,8 @@ pub mod time_service {
                     ).await
                 }
 
+                /// Call RPC `GET_TIME` with explicit call options.
+                /// Options select timeout, authentication and local cancellation policy.
                 pub async fn get_time_with_options(&self, options: &onc_rpc_runtime::CallOptions) -> Result<crate::time_service::time_string, onc_rpc_runtime::RuntimeError> {
                     self.client.call_typed_with_options(
                         onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION },
@@ -66,11 +74,13 @@ pub mod time_service {
             }
 
             impl TIME_SERVICE_V1Client<onc_rpc_runtime::OwnedRpcTransport> {
-                /// Send generated XDR segments and decode the result in caller-bounded storage.
+                /// Call RPC `GET_TIME` with segmented encoding and a caller-owned reply buffer.
+                /// Decodes the full typed reply; the outcome returns `buffer`, including on error.
                 pub async fn get_time_segmented<B: AsMut<[u8]> + Send + 'static>(&self, buffer: B, options: &onc_rpc_runtime::CallOptions) -> onc_rpc_runtime::TypedReceiveOutcome<crate::time_service::time_string, B> {
                     self.client.call_xdr_segmented::<_, crate::time_service::time_string, B>(onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION }, onc_rpc_runtime::Procedure(super::GET_TIME), &(), buffer, options).await
                 }
-                /// Admit a segmented call immediately, returning both owners on refusal.
+                /// Admit RPC `GET_TIME` with segmented encoding, without waiting for capacity.
+                /// Returns an unpolled future, or the unsent request and buffer on refusal.
                 #[allow(clippy::result_large_err)] // Refusal returns original owners without boxing.
                 pub fn try_get_time_segmented<B: AsMut<[u8]> + Send + 'static>(&self, buffer: B, options: &onc_rpc_runtime::CallOptions) -> Result<impl std::future::Future<Output = onc_rpc_runtime::TypedReceiveOutcome<crate::time_service::time_string, B>> + Send + 'static + use<B>, onc_rpc_runtime::CallRefusal<(), B>> {
                     self.client.try_call_xdr_segmented::<_, crate::time_service::time_string, B>(onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION }, onc_rpc_runtime::Procedure(super::GET_TIME), (), buffer, options)
@@ -82,6 +92,8 @@ pub mod time_service {
 
         pub mod server {
             pub trait TIME_SERVICE_V1Service {
+                /// Handle RPC `GET_TIME` and return its typed reply.
+                /// Request metadata is available through `request`.
                 fn get_time(&self, request: &onc_rpc_server::RequestContext) -> Result<crate::time_service::time_string, onc_rpc_server::DispatchError>;
             }
 
@@ -114,6 +126,8 @@ pub mod time_service {
         pub mod async_server {
             #[onc_rpc_server::async_trait]
             pub trait TIME_SERVICE_V1Service {
+                /// Handle RPC `GET_TIME` and return its typed reply.
+                /// Request metadata is available through `request`.
                 async fn get_time(&self, request: &onc_rpc_server::RequestContext) -> Result<crate::time_service::time_string, onc_rpc_server::DispatchError>;
             }
 

@@ -1,10 +1,10 @@
 # Caller-owned RPC buffers
 
-The optional `OwnedRpcTransport::call_into`, `call_segmented` and admission APIs are additive
-in **0.2.3**.
-Existing `AsyncClientTransport`, generated clients, synchronous clients and
-`RpcMessage` representations remain available without source migration. This
-change prepares a library release; it does not publish crates or create a tag.
+The `OwnedRpcTransport::call_into`, `call_segmented`, generated caller-owned
+methods and admission APIs are part of **0.3**. Ordinary typed method signatures
+and RPC wire representations remain available. Source changes to `CallOptions`
+and `RuntimeError`, explicit cancellation, and changed timeout behavior are
+covered in the [migration guide](migration.md).
 
 ## Ownership and wire contract
 
@@ -12,8 +12,11 @@ A `SegmentedRequest` contains an RPC call envelope with an empty payload and a
 `Vec<Bytes>` containing its complete XDR argument stream. The envelope carries
 program, version, procedure, credentials, verifier and a caller-assigned XID.
 That XID must not be reused on the same physical connection, including after a
-cancellation or timeout. Use a monotonically allocated XID and replace the
-connection on exhaustion, as the existing `AsyncClient` does.
+cancellation or timeout. Allocate raw requests with
+`transport.xid_allocator().allocate()?`, especially when sharing a connection
+with typed clients. Built-in transport clones and their synchronous/asynchronous
+clients share that allocator. It never wraps; replace the connection on
+exhaustion. A manually chosen XID is still the caller's responsibility.
 
 `Bytes::from_owner` can retain a custom immutable allocation without copying it.
 The writer holds its segments through all partial writes. It emits a single
@@ -108,11 +111,13 @@ its destination is released. `admission_snapshot()` exposes the current counters
 Closing the connection wakes capacity waiters but does not pretend live owners
 have already been released.
 
-This contract distinguishes refusal from a timeout after sending. An interrupted
-frame still retires the connection, and the owned-receiver reply deadline still
-retires it to recover its destination. Detaching a timed-out receiver and draining
-a late reply without closing the connection is separate future work. A failure
-after sending does not prove that the remote procedure did not execute.
+This contract distinguishes pre-send refusal from cancellation or a call
+deadline after sending starts. Explicit cancellation and call deadlines preserve
+an otherwise healthy connection: an active writer finishes its frame, and the
+reader releases the destination before discarding any remaining or late reply.
+A hard write timeout, I/O failure, or dropped future during a partial write can
+still retire the connection. Any failure after sending starts leaves remote
+execution uncertain; it does not prove that the procedure was not executed.
 
 See the runnable [client](../examples/owned-buffers/src/bin/buffer-client.rs) and
 [server](../examples/owned-buffers/src/bin/buffer-server.rs), which use generated
@@ -131,26 +136,37 @@ XIDs are drained within the framing limits without decoding their discarded
 envelopes. An explicit `close` interrupts the connection; its reader retains any
 active buffers until its task actually stops.
 
-Cancellation before submission releases the caller's buffers immediately.
-Cancellation while waiting for the writer removes the unsent registration.
-Cancellation after starting a partial frame closes the connection so another
-frame cannot follow a truncated one. Dropping a future after a complete send
-abandons its result, but retains the outstanding XID and receiver until the response has been consumed or the
-connection is closed. A late response cannot write into a buffer reused by
-another work unit. A blocked, nonresponding peer can therefore retain memory
-until connection retirement; the consumer remains responsible for a suitable
-watchdog/retirement policy when dropping futures without a deadline.
+`CallOptions::with_cancellation(CallCancellation)` requests cancellation of
+one call. The token is clonable and sticky: `cancel()` wakes its waiters, and a
+canceled token remains canceled. Use a new token for a new cancellation scope.
+Both ordinary calls and generated caller-owned methods accept it through their
+existing options arguments. No extra generated cancellation-specific methods
+are needed.
 
-A configured call or write deadline while queued for the writer removes only
-that unsent registration and returns its receiver. Once frame writing has
-started, a deadline retires the shared connection and awaits actual receiver
-cleanup before returning the original receiver with the timeout error. This can
-fail other calls sharing that generation, which must retry on another connection.
-The configured deadline requests cleanup; returning the owned outcome can take
-longer than that deadline while cleanup runs. To cancel explicitly and recover
-the receiver, call `close()` and continue awaiting `call_into`; do not drop its
-future. `close()` and `wait_closed()` alone report terminal state, not physical
-quiescence. The owned outcome supplies the per-operation quiescence boundary.
+| Call phase | Explicit cancellation or call deadline | Dropping the future |
+| --- | --- | --- |
+| Before writing, including waiting for the writer | Remove the unsent registration and release its owners. | Remove the unsent registration and release its owners. |
+| A request frame is partially written | Finish the frame, then release or detach the reply destination. A hard write timeout or I/O failure can retire the connection. | A truncated frame cannot be followed by another frame; the connection can be retired. |
+| The complete request has been sent | Stop result delivery and detach the destination after the reader's last access. Drain the remaining or late reply within record limits. | Abandon result delivery and release the destination after the reader's last access. There is no returned owner. |
+
+For explicit cancellation, keep the call future alive and await its outcome.
+`ReceiveOutcome` or `TypedReceiveOutcome` returns the original destination after
+it is quiescent. A late reply cannot write into storage returned to another call.
+Cancellation races with successful completion; whichever result completes the
+operation is returned. It is not a remote abort or an automatic retry request.
+
+A call deadline returns `RuntimeError::CallTimeout { duration }`. Explicit
+cancellation returns `RuntimeError::Cancelled`. A hard write budget returns
+`RuntimeError::WriteTimeout { duration }`. Completing a partial request frame or
+waiting for an active read to stop can delay ownership return beyond the logical
+call deadline. Configure `ClientConfig::with_write_timeout` if a stalled writer
+must have a finite cleanup bound; without it, finishing that frame can wait for
+the peer to accept bytes.
+
+`close()` remains a whole-connection operation, affecting other pending calls.
+It and `wait_closed()` report terminal state, not physical quiescence. Continue
+awaiting each owned call to recover its storage. Closing a connection is not
+required merely to cancel one call or let its call deadline expire.
 
 The connection's reader and writer are independent of application scheduling. Existing
 legacy calls and owned-buffer calls can be multiplexed together and correlated

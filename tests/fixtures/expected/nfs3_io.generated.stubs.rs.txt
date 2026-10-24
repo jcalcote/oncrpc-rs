@@ -17,6 +17,8 @@ pub mod nfs_program {
                     Self { client }
                 }
 
+                /// Call RPC `NFSPROC3_READ` and decode its typed reply.
+                /// Blocks until completion using the client's default call policy.
                 pub fn nfsproc3_read(&self, argument: crate::nfs3_io::READ3args) -> Result<crate::nfs3_io::READ3res, onc_rpc_runtime::RuntimeError> {
                     self.client.call_typed(
                         onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION },
@@ -25,6 +27,8 @@ pub mod nfs_program {
                     )
                 }
 
+                /// Call RPC `NFSPROC3_READ` with explicit call options.
+                /// Options select timeout, authentication and local cancellation policy.
                 pub fn nfsproc3_read_with_options(&self, argument: crate::nfs3_io::READ3args, options: &onc_rpc_runtime::CallOptions) -> Result<crate::nfs3_io::READ3res, onc_rpc_runtime::RuntimeError> {
                     self.client.call_typed_with_options(
                         onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION },
@@ -34,6 +38,8 @@ pub mod nfs_program {
                     )
                 }
 
+                /// Call RPC `NFSPROC3_WRITE` and decode its typed reply.
+                /// Blocks until completion using the client's default call policy.
                 pub fn nfsproc3_write(&self, argument: crate::nfs3_io::WRITE3args) -> Result<crate::nfs3_io::WRITE3res, onc_rpc_runtime::RuntimeError> {
                     self.client.call_typed(
                         onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION },
@@ -42,6 +48,8 @@ pub mod nfs_program {
                     )
                 }
 
+                /// Call RPC `NFSPROC3_WRITE` with explicit call options.
+                /// Options select timeout, authentication and local cancellation policy.
                 pub fn nfsproc3_write_with_options(&self, argument: crate::nfs3_io::WRITE3args, options: &onc_rpc_runtime::CallOptions) -> Result<crate::nfs3_io::WRITE3res, onc_rpc_runtime::RuntimeError> {
                     self.client.call_typed_with_options(
                         onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION },
@@ -51,6 +59,8 @@ pub mod nfs_program {
                     )
                 }
 
+                /// Call RPC `NFSPROC3_COMMIT` and decode its typed reply.
+                /// Blocks until completion using the client's default call policy.
                 pub fn nfsproc3_commit(&self, argument: crate::nfs3_io::COMMIT3args) -> Result<crate::nfs3_io::COMMIT3res, onc_rpc_runtime::RuntimeError> {
                     self.client.call_typed(
                         onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION },
@@ -59,6 +69,8 @@ pub mod nfs_program {
                     )
                 }
 
+                /// Call RPC `NFSPROC3_COMMIT` with explicit call options.
+                /// Options select timeout, authentication and local cancellation policy.
                 pub fn nfsproc3_commit_with_options(&self, argument: crate::nfs3_io::COMMIT3args, options: &onc_rpc_runtime::CallOptions) -> Result<crate::nfs3_io::COMMIT3res, onc_rpc_runtime::RuntimeError> {
                     self.client.call_typed_with_options(
                         onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION },
@@ -82,6 +94,8 @@ pub mod nfs_program {
                     Self { client }
                 }
 
+                /// Call RPC `NFSPROC3_READ` and decode its typed reply.
+                /// Awaits completion using the client's default call policy.
                 pub async fn nfsproc3_read(&self, argument: crate::nfs3_io::READ3args) -> Result<crate::nfs3_io::READ3res, onc_rpc_runtime::RuntimeError> {
                     self.client.call_typed(
                         onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION },
@@ -90,6 +104,8 @@ pub mod nfs_program {
                     ).await
                 }
 
+                /// Call RPC `NFSPROC3_READ` with explicit call options.
+                /// Options select timeout, authentication and local cancellation policy.
                 pub async fn nfsproc3_read_with_options(&self, argument: crate::nfs3_io::READ3args, options: &onc_rpc_runtime::CallOptions) -> Result<crate::nfs3_io::READ3res, onc_rpc_runtime::RuntimeError> {
                     self.client.call_typed_with_options(
                         onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION },
@@ -99,6 +115,8 @@ pub mod nfs_program {
                     ).await
                 }
 
+                /// Call RPC `NFSPROC3_WRITE` and decode its typed reply.
+                /// Awaits completion using the client's default call policy.
                 pub async fn nfsproc3_write(&self, argument: crate::nfs3_io::WRITE3args) -> Result<crate::nfs3_io::WRITE3res, onc_rpc_runtime::RuntimeError> {
                     self.client.call_typed(
                         onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION },
@@ -107,6 +125,8 @@ pub mod nfs_program {
                     ).await
                 }
 
+                /// Call RPC `NFSPROC3_WRITE` with explicit call options.
+                /// Options select timeout, authentication and local cancellation policy.
                 pub async fn nfsproc3_write_with_options(&self, argument: crate::nfs3_io::WRITE3args, options: &onc_rpc_runtime::CallOptions) -> Result<crate::nfs3_io::WRITE3res, onc_rpc_runtime::RuntimeError> {
                     self.client.call_typed_with_options(
                         onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION },
@@ -116,6 +136,8 @@ pub mod nfs_program {
                     ).await
                 }
 
+                /// Call RPC `NFSPROC3_COMMIT` and decode its typed reply.
+                /// Awaits completion using the client's default call policy.
                 pub async fn nfsproc3_commit(&self, argument: crate::nfs3_io::COMMIT3args) -> Result<crate::nfs3_io::COMMIT3res, onc_rpc_runtime::RuntimeError> {
                     self.client.call_typed(
                         onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION },
@@ -124,6 +146,8 @@ pub mod nfs_program {
                     ).await
                 }
 
+                /// Call RPC `NFSPROC3_COMMIT` with explicit call options.
+                /// Options select timeout, authentication and local cancellation policy.
                 pub async fn nfsproc3_commit_with_options(&self, argument: crate::nfs3_io::COMMIT3args, options: &onc_rpc_runtime::CallOptions) -> Result<crate::nfs3_io::COMMIT3res, onc_rpc_runtime::RuntimeError> {
                     self.client.call_typed_with_options(
                         onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION },
@@ -136,42 +160,50 @@ pub mod nfs_program {
             }
 
             impl NFS_V3Client<onc_rpc_runtime::OwnedRpcTransport> {
-                /// Send generated XDR segments and decode the result in caller-bounded storage.
+                /// Call RPC `NFSPROC3_READ` with segmented encoding and a caller-owned reply buffer.
+                /// Decodes the full typed reply; the outcome returns `buffer`, including on error.
                 pub async fn nfsproc3_read_segmented<B: AsMut<[u8]> + Send + 'static>(&self, argument: crate::nfs3_io::READ3args, buffer: B, options: &onc_rpc_runtime::CallOptions) -> onc_rpc_runtime::TypedReceiveOutcome<crate::nfs3_io::READ3res, B> {
                     self.client.call_xdr_segmented::<_, crate::nfs3_io::READ3res, B>(onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION }, onc_rpc_runtime::Procedure(super::NFSPROC3_READ), &argument, buffer, options).await
                 }
-                /// Admit a segmented call immediately, returning both owners on refusal.
+                /// Admit RPC `NFSPROC3_READ` with segmented encoding, without waiting for capacity.
+                /// Returns an unpolled future, or the unsent request and buffer on refusal.
                 #[allow(clippy::result_large_err)] // Refusal returns original owners without boxing.
                 pub fn try_nfsproc3_read_segmented<B: AsMut<[u8]> + Send + 'static>(&self, argument: crate::nfs3_io::READ3args, buffer: B, options: &onc_rpc_runtime::CallOptions) -> Result<impl std::future::Future<Output = onc_rpc_runtime::TypedReceiveOutcome<crate::nfs3_io::READ3res, B>> + Send + 'static + use<B>, onc_rpc_runtime::CallRefusal<crate::nfs3_io::READ3args, B>> {
                     self.client.try_call_xdr_segmented::<_, crate::nfs3_io::READ3res, B>(onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION }, onc_rpc_runtime::Procedure(super::NFSPROC3_READ), argument, buffer, options)
                 }
-                /// Decode generated metadata and place the terminal opaque body directly in `buffer`.
+                /// Call RPC `NFSPROC3_READ`, placing the reply's opaque body directly in `buffer`.
+                /// Returns typed metadata and the quiescent buffer, including on error.
                 pub async fn nfsproc3_read_into<B: AsMut<[u8]> + Send + 'static>(&self, argument: crate::nfs3_io::READ3args, buffer: B, options: &onc_rpc_runtime::CallOptions) -> onc_rpc_runtime::TypedReceiveOutcome<crate::nfs3_io::READ3resMetadata, B> {
                     self.client.call_xdr_into::<_, crate::nfs3_io::READ3resMetadata, B>(onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION }, onc_rpc_runtime::Procedure(super::NFSPROC3_READ), &argument, buffer, options).await
                 }
-                /// Admit immediately; refusal returns the unsent request and original receive owner.
+                /// Admit RPC `NFSPROC3_READ` for direct-body receive, without waiting for capacity.
+                /// Returns an unpolled future, or the unsent request and buffer on refusal.
                 #[allow(clippy::result_large_err)] // Refusal returns original owners without boxing.
                 pub fn try_nfsproc3_read_into<B: AsMut<[u8]> + Send + 'static>(&self, argument: crate::nfs3_io::READ3args, buffer: B, options: &onc_rpc_runtime::CallOptions) -> Result<impl std::future::Future<Output = onc_rpc_runtime::TypedReceiveOutcome<crate::nfs3_io::READ3resMetadata, B>> + Send + 'static + use<B>, onc_rpc_runtime::CallRefusal<crate::nfs3_io::READ3args, B>> {
                     self.client.try_call_xdr_into::<_, crate::nfs3_io::READ3resMetadata, B>(onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION }, onc_rpc_runtime::Procedure(super::NFSPROC3_READ), argument, buffer, options)
                 }
 
-                /// Send generated XDR segments and decode the result in caller-bounded storage.
+                /// Call RPC `NFSPROC3_WRITE` with segmented encoding and a caller-owned reply buffer.
+                /// Decodes the full typed reply; the outcome returns `buffer`, including on error.
                 pub async fn nfsproc3_write_segmented<B: AsMut<[u8]> + Send + 'static, A: Into<crate::nfs3_io::WRITE3argsSegments>>(&self, argument: A, buffer: B, options: &onc_rpc_runtime::CallOptions) -> onc_rpc_runtime::TypedReceiveOutcome<crate::nfs3_io::WRITE3res, B> {
                     let argument: crate::nfs3_io::WRITE3argsSegments = argument.into();
                     self.client.call_xdr_segmented::<_, crate::nfs3_io::WRITE3res, B>(onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION }, onc_rpc_runtime::Procedure(super::NFSPROC3_WRITE), &argument, buffer, options).await
                 }
-                /// Admit a segmented call immediately, returning both owners on refusal.
+                /// Admit RPC `NFSPROC3_WRITE` with segmented encoding, without waiting for capacity.
+                /// Returns an unpolled future, or the unsent request and buffer on refusal.
                 #[allow(clippy::result_large_err)] // Refusal returns original owners without boxing.
                 pub fn try_nfsproc3_write_segmented<B: AsMut<[u8]> + Send + 'static, A: Into<crate::nfs3_io::WRITE3argsSegments>>(&self, argument: A, buffer: B, options: &onc_rpc_runtime::CallOptions) -> Result<impl std::future::Future<Output = onc_rpc_runtime::TypedReceiveOutcome<crate::nfs3_io::WRITE3res, B>> + Send + 'static + use<A, B>, onc_rpc_runtime::CallRefusal<crate::nfs3_io::WRITE3argsSegments, B>> {
                     let argument: crate::nfs3_io::WRITE3argsSegments = argument.into();
                     self.client.try_call_xdr_segmented::<_, crate::nfs3_io::WRITE3res, B>(onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION }, onc_rpc_runtime::Procedure(super::NFSPROC3_WRITE), argument, buffer, options)
                 }
 
-                /// Send generated XDR segments and decode the result in caller-bounded storage.
+                /// Call RPC `NFSPROC3_COMMIT` with segmented encoding and a caller-owned reply buffer.
+                /// Decodes the full typed reply; the outcome returns `buffer`, including on error.
                 pub async fn nfsproc3_commit_segmented<B: AsMut<[u8]> + Send + 'static>(&self, argument: crate::nfs3_io::COMMIT3args, buffer: B, options: &onc_rpc_runtime::CallOptions) -> onc_rpc_runtime::TypedReceiveOutcome<crate::nfs3_io::COMMIT3res, B> {
                     self.client.call_xdr_segmented::<_, crate::nfs3_io::COMMIT3res, B>(onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION }, onc_rpc_runtime::Procedure(super::NFSPROC3_COMMIT), &argument, buffer, options).await
                 }
-                /// Admit a segmented call immediately, returning both owners on refusal.
+                /// Admit RPC `NFSPROC3_COMMIT` with segmented encoding, without waiting for capacity.
+                /// Returns an unpolled future, or the unsent request and buffer on refusal.
                 #[allow(clippy::result_large_err)] // Refusal returns original owners without boxing.
                 pub fn try_nfsproc3_commit_segmented<B: AsMut<[u8]> + Send + 'static>(&self, argument: crate::nfs3_io::COMMIT3args, buffer: B, options: &onc_rpc_runtime::CallOptions) -> Result<impl std::future::Future<Output = onc_rpc_runtime::TypedReceiveOutcome<crate::nfs3_io::COMMIT3res, B>> + Send + 'static + use<B>, onc_rpc_runtime::CallRefusal<crate::nfs3_io::COMMIT3args, B>> {
                     self.client.try_call_xdr_segmented::<_, crate::nfs3_io::COMMIT3res, B>(onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION }, onc_rpc_runtime::Procedure(super::NFSPROC3_COMMIT), argument, buffer, options)
@@ -183,8 +215,14 @@ pub mod nfs_program {
 
         pub mod server {
             pub trait NFS_V3Service {
+                /// Handle RPC `NFSPROC3_READ` and return its typed reply.
+                /// Request metadata is available through `request`.
                 fn nfsproc3_read(&self, request: &onc_rpc_server::RequestContext, argument: crate::nfs3_io::READ3args) -> Result<crate::nfs3_io::READ3res, onc_rpc_server::DispatchError>;
+                /// Handle RPC `NFSPROC3_WRITE` and return its typed reply.
+                /// Request metadata is available through `request`.
                 fn nfsproc3_write(&self, request: &onc_rpc_server::RequestContext, argument: crate::nfs3_io::WRITE3args) -> Result<crate::nfs3_io::WRITE3res, onc_rpc_server::DispatchError>;
+                /// Handle RPC `NFSPROC3_COMMIT` and return its typed reply.
+                /// Request metadata is available through `request`.
                 fn nfsproc3_commit(&self, request: &onc_rpc_server::RequestContext, argument: crate::nfs3_io::COMMIT3args) -> Result<crate::nfs3_io::COMMIT3res, onc_rpc_server::DispatchError>;
             }
 
@@ -229,8 +267,14 @@ pub mod nfs_program {
         pub mod async_server {
             #[onc_rpc_server::async_trait]
             pub trait NFS_V3Service {
+                /// Handle RPC `NFSPROC3_READ` and return its typed reply.
+                /// Request metadata is available through `request`.
                 async fn nfsproc3_read(&self, request: &onc_rpc_server::RequestContext, argument: crate::nfs3_io::READ3args) -> Result<crate::nfs3_io::READ3res, onc_rpc_server::DispatchError>;
+                /// Handle RPC `NFSPROC3_WRITE` and return its typed reply.
+                /// Request metadata is available through `request`.
                 async fn nfsproc3_write(&self, request: &onc_rpc_server::RequestContext, argument: crate::nfs3_io::WRITE3args) -> Result<crate::nfs3_io::WRITE3res, onc_rpc_server::DispatchError>;
+                /// Handle RPC `NFSPROC3_COMMIT` and return its typed reply.
+                /// Request metadata is available through `request`.
                 async fn nfsproc3_commit(&self, request: &onc_rpc_server::RequestContext, argument: crate::nfs3_io::COMMIT3args) -> Result<crate::nfs3_io::COMMIT3res, onc_rpc_server::DispatchError>;
             }
 

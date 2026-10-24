@@ -2,10 +2,40 @@
 use crate::{
     AdmissionError, AsyncClient, CallOptions, CallRefusal, CallRequest, OwnedRpcTransport,
     Procedure, ProgramVersion, ReceiveOutcome, ReplyReceiver, RuntimeError, SegmentedRequest,
-    allocate_xid, build_request_message_with_options, handle_reply,
+    build_request_message_with_options, handle_reply,
 };
 use bytes::Bytes;
 use onc_rpc_xdr::{XdrDecode, XdrEncodeSegments, XdrError, XdrReplyMetadata};
+use pin_project_lite::pin_project;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
+pin_project! {
+    // Mapping an already constructed future with `async move { call.await }`
+    // stores the captured call and its moved awaitee in separate frame slots.
+    // Structural projection polls the child in its single original slot.
+    struct MapCall<F, Complete> {
+        #[pin]
+        call: F,
+        complete: Option<Complete>,
+    }
+}
+impl<F, Complete, Output> Future for MapCall<F, Complete>
+where
+    F: Future,
+    Complete: FnOnce(F::Output) -> Output,
+{
+    type Output = Output;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Output> {
+        let this = self.project();
+        this.call.poll(cx).map(|result| {
+            this.complete
+                .take()
+                .expect("completed call must not be polled again")(result)
+        })
+    }
+}
 
 /// A typed completion together with the original, now quiescent destination.
 ///
@@ -199,7 +229,7 @@ impl AsyncClient<OwnedRpcTransport> {
         payload: Vec<Bytes>,
         options: &CallOptions,
     ) -> Result<SegmentedRequest, RuntimeError> {
-        let xid = allocate_xid(&self.next_xid)?;
+        let xid = self.next_xid.allocate()?;
         Ok(SegmentedRequest {
             header: build_request_message_with_options(
                 &self.config,
@@ -226,14 +256,18 @@ impl AsyncClient<OwnedRpcTransport> {
         M: XdrReplyMetadata,
         B: AsMut<[u8]> + Send + 'static,
     {
-        match self.try_call_xdr_into(program, procedure, argument, buffer, options) {
-            Ok(call) => call.await,
-            Err(refusal) => TypedReceiveOutcome {
-                result: Err(self.transport.admission_error(refusal.reason)),
-                buffer: refusal.receiver,
-                payload_len: 0,
-            },
-        }
+        // End the admission Result's lifetime before awaiting its accepted call.
+        let call = match self.try_call_xdr_into(program, procedure, argument, buffer, options) {
+            Ok(call) => call,
+            Err(refusal) => {
+                return TypedReceiveOutcome {
+                    result: Err(self.transport.admission_error(refusal.reason)),
+                    buffer: refusal.receiver,
+                    payload_len: 0,
+                };
+            }
+        };
+        call.await
     }
 
     /// Immediately admit a generated receive operation, or return its unsent owners.
@@ -299,14 +333,18 @@ impl AsyncClient<OwnedRpcTransport> {
         Ret: XdrDecode + 'static,
         B: AsMut<[u8]> + Send + 'static,
     {
-        match self.try_call_xdr_segmented(program, procedure, argument, buffer, options) {
-            Ok(call) => call.await,
-            Err(refusal) => TypedReceiveOutcome {
-                result: Err(self.transport.admission_error(refusal.reason)),
-                buffer: refusal.receiver,
-                payload_len: 0,
-            },
-        }
+        let call = match self.try_call_xdr_segmented(program, procedure, argument, buffer, options)
+        {
+            Ok(call) => call,
+            Err(refusal) => {
+                return TypedReceiveOutcome {
+                    result: Err(self.transport.admission_error(refusal.reason)),
+                    buffer: refusal.receiver,
+                    payload_len: 0,
+                };
+            }
+        };
+        call.await
     }
 
     /// Immediately admit a segmented typed call, or return all unsent owners.
@@ -378,15 +416,19 @@ impl OwnedRpcTransport {
     {
         let xid = request.header.xid;
         let call = self.try_call_into(request, receiver, options)?;
-        Ok(async move {
-            let ReceiveOutcome {
-                result, receiver, ..
-            } = call.await;
-            receiver.finish(
-                result
-                    .and_then(|header| handle_reply(xid, header))
-                    .map(|_| ()),
-            )
+        Ok(MapCall {
+            call,
+            complete: Some(
+                move |ReceiveOutcome {
+                          result, receiver, ..
+                      }: ReceiveOutcome<XdrDecodeReceiver<Ret, B>>| {
+                    receiver.finish(
+                        result
+                            .and_then(|header| handle_reply(xid, header))
+                            .map(|_| ()),
+                    )
+                },
+            ),
         })
     }
 
@@ -411,15 +453,19 @@ impl OwnedRpcTransport {
     {
         let xid = request.header.xid;
         let call = self.try_call_into(request, receiver, options)?;
-        Ok(async move {
-            let ReceiveOutcome {
-                result, receiver, ..
-            } = call.await;
-            receiver.finish(
-                result
-                    .and_then(|header| handle_reply(xid, header))
-                    .map(|_| ()),
-            )
+        Ok(MapCall {
+            call,
+            complete: Some(
+                move |ReceiveOutcome {
+                          result, receiver, ..
+                      }: ReceiveOutcome<XdrReplyReceiver<M, B>>| {
+                    receiver.finish(
+                        result
+                            .and_then(|header| handle_reply(xid, header))
+                            .map(|_| ()),
+                    )
+                },
+            ),
         })
     }
 }
@@ -445,6 +491,86 @@ mod tests {
         fn opaque_len(&self) -> Option<usize> {
             Some(self.0 as usize)
         }
+    }
+
+    #[tokio::test]
+    async fn typed_bridges_store_each_pending_transport_future_once() {
+        let (local, _peer) = duplex(512);
+        let config = ClientConfig::new("127.0.0.1:2049".parse().unwrap());
+        let transport = OwnedRpcTransport::from_stream(local, &config).unwrap();
+        let client = AsyncClient::new(config, transport.clone());
+        let program = ProgramVersion {
+            program: 42,
+            version: 1,
+        };
+        let options = CallOptions::default();
+        let request = || {
+            client
+                .segmented_request(program, Procedure(1), vec![], &options)
+                .unwrap()
+        };
+
+        let raw_read = transport
+            .try_call_into(
+                request(),
+                XdrReplyReceiver::<Metadata, _>::new([0; 128]),
+                &options,
+            )
+            .unwrap();
+        let mapped_read = transport
+            .try_xdr_receive(
+                request(),
+                XdrReplyReceiver::<Metadata, _>::new([0; 128]),
+                &options,
+            )
+            .unwrap();
+        let raw_decode = transport
+            .try_call_into(
+                request(),
+                XdrDecodeReceiver::<u32, _>::new([0; 128]),
+                &options,
+            )
+            .unwrap();
+        let mapped_decode = transport
+            .try_xdr_decode(
+                request(),
+                XdrDecodeReceiver::<u32, _>::new([0; 128]),
+                &options,
+            )
+            .unwrap();
+
+        // Pointer-scaled slack allows layout/alignment changes across targets.
+        // Mapping may add completion state, but never a second child frame.
+        let mapping_slack = 4 * std::mem::size_of::<usize>();
+        assert!(
+            std::mem::size_of_val(&mapped_read) <= std::mem::size_of_val(&raw_read) + mapping_slack
+        );
+        assert!(
+            std::mem::size_of_val(&mapped_decode)
+                <= std::mem::size_of_val(&raw_decode) + mapping_slack
+        );
+
+        let read = client.call_xdr_into::<_, Metadata, _>(
+            program,
+            Procedure(1),
+            &1u32,
+            [0; 128],
+            &options,
+        );
+        let decode = client.call_xdr_segmented::<_, u32, _>(
+            program,
+            Procedure(1),
+            &1u32,
+            [0; 128],
+            &options,
+        );
+        // The async convenience retains its inputs and one mapped call. Its
+        // admission Result must not retain another complete mapped call.
+        let input_slack = std::mem::size_of::<[u8; 128]>() + 32 * std::mem::size_of::<usize>();
+        assert!(std::mem::size_of_val(&read) <= std::mem::size_of_val(&mapped_read) + input_slack);
+        assert!(
+            std::mem::size_of_val(&decode) <= std::mem::size_of_val(&mapped_decode) + input_slack
+        );
     }
 
     fn feed(receiver: &mut impl ReplyReceiver, bytes: &[u8]) -> Result<(), RuntimeError> {
@@ -674,6 +800,7 @@ mod tests {
         let client = AsyncClient::new(config, transport.clone());
         client
             .next_xid
+            .0
             .store(u32::MAX, std::sync::atomic::Ordering::Relaxed);
         let argument = Bytes::from_owner(vec![42; 16]);
         let original_request = argument.as_ptr();

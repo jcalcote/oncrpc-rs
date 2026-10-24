@@ -7,6 +7,7 @@ use onc_rpc_runtime::{
     write_rpc_message,
 };
 use onc_rpc_wire::fragment_record;
+use std::future::Future;
 use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::Duration;
@@ -228,9 +229,10 @@ async fn async_transport_honors_default_call_timeout() {
         .expect("listener should bind");
     let addr = listener.local_addr().expect("local addr");
 
-    let _server = tokio::spawn(async move {
+    let (finish, finished) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
         let (_stream, _) = listener.accept().await.expect("accept should succeed");
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        let _ = finished.await;
     });
 
     let config = ClientConfig::new(addr)
@@ -253,15 +255,14 @@ async fn async_transport_honors_default_call_timeout() {
         .await
         .expect_err("call should time out");
 
-    match error {
-        onc_rpc_runtime::RuntimeError::Transport(message) => {
-            assert!(
-                message.contains("call timeout"),
-                "unexpected message: {message}"
-            );
+    assert_eq!(
+        error,
+        onc_rpc_runtime::RuntimeError::CallTimeout {
+            duration: Duration::from_millis(50)
         }
-        other => panic!("expected call-timeout transport error, got {other:?}"),
-    }
+    );
+    finish.send(()).unwrap();
+    server.await.unwrap();
 }
 
 #[tokio::test]
@@ -271,12 +272,15 @@ async fn async_transport_can_disable_timeout_per_call() {
         .expect("listener should bind");
     let addr = listener.local_addr().expect("local addr");
 
+    let (seen, observed) = tokio::sync::oneshot::channel();
+    let (release, released) = tokio::sync::oneshot::channel();
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.expect("accept should succeed");
         let (mut reader, mut writer) = stream.into_split();
         let mut buffer = BytesMut::with_capacity(1024);
         let request = next_message(&mut reader, &mut buffer).await;
-        tokio::time::sleep(Duration::from_millis(120)).await;
+        seen.send(()).unwrap();
+        released.await.unwrap();
         write_rpc_message(&mut writer, &reply(request.xid, request_payload(&request)))
             .await
             .expect("reply should write");
@@ -290,18 +294,34 @@ async fn async_transport_can_disable_timeout_per_call() {
         .expect("client should connect");
     let client = AsyncClient::new(config, transport);
 
-    let response: u32 = client
-        .call_typed_with_options::<u32, u32>(
-            ProgramVersion {
-                program: 100_003,
-                version: 3,
-            },
-            Procedure(1),
-            &33_u32,
-            &CallOptions::new().without_timeout(),
-        )
+    // Connect using real I/O first. With this call's timeout disabled, no call
+    // timer can race the explicit server-request readiness event below.
+    tokio::time::pause();
+    let options = CallOptions::new().without_timeout();
+    let argument = 33_u32;
+    let mut call = Box::pin(client.call_typed_with_options::<u32, u32>(
+        ProgramVersion {
+            program: 100_003,
+            version: 3,
+        },
+        Procedure(1),
+        &argument,
+        &options,
+    ));
+    tokio::select! {
+        outcome = &mut call => panic!("call completed before gated reply: {outcome:?}"),
+        seen = observed => seen.unwrap(),
+    }
+    tokio::time::advance(Duration::from_secs(1)).await;
+    std::future::poll_fn(|cx| {
+        assert!(call.as_mut().poll(cx).is_pending());
+        std::task::Poll::Ready(())
+    })
+    .await;
+    release.send(()).unwrap();
+    let response = call
         .await
-        .expect("call should succeed without timeout");
+        .expect("disabled call timeout must remain disabled");
 
     assert_eq!(response, 33);
     server.await.expect("server task should complete");
@@ -314,9 +334,10 @@ async fn async_transport_can_override_timeout_per_call() {
         .expect("listener should bind");
     let addr = listener.local_addr().expect("local addr");
 
-    let _server = tokio::spawn(async move {
+    let (finish, finished) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
         let (_stream, _) = listener.accept().await.expect("accept should succeed");
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        let _ = finished.await;
     });
 
     let config = ClientConfig::new(addr).with_connect_timeout(Duration::from_secs(5));
@@ -338,15 +359,14 @@ async fn async_transport_can_override_timeout_per_call() {
         .await
         .expect_err("call should time out");
 
-    match error {
-        onc_rpc_runtime::RuntimeError::Transport(message) => {
-            assert!(
-                message.contains("call timeout"),
-                "unexpected message: {message}"
-            );
+    assert_eq!(
+        error,
+        onc_rpc_runtime::RuntimeError::CallTimeout {
+            duration: Duration::from_millis(50)
         }
-        other => panic!("expected call-timeout transport error, got {other:?}"),
-    }
+    );
+    finish.send(()).unwrap();
+    server.await.unwrap();
 }
 
 #[tokio::test]
@@ -413,13 +433,14 @@ async fn async_transport_discards_late_reply_and_preserves_connection() {
         .expect("listener should bind");
     let addr = listener.local_addr().expect("local addr");
 
+    let (release_late, send_late) = tokio::sync::oneshot::channel();
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.expect("accept should succeed");
         let (mut reader, mut writer) = stream.into_split();
         let mut buffer = BytesMut::with_capacity(1024);
 
         let first = next_message(&mut reader, &mut buffer).await;
-        tokio::time::sleep(Duration::from_millis(70)).await;
+        send_late.await.unwrap();
         write_rpc_message(&mut writer, &reply(first.xid, request_payload(&first)))
             .await
             .expect("late reply should write");
@@ -449,24 +470,23 @@ async fn async_transport_discards_late_reply_and_preserves_connection() {
         )
         .await
         .expect_err("first call should time out");
-    match first_error {
-        onc_rpc_runtime::RuntimeError::Transport(message) => {
-            assert!(
-                message.contains("call timeout"),
-                "unexpected message: {message}"
-            );
+    assert_eq!(
+        first_error,
+        onc_rpc_runtime::RuntimeError::CallTimeout {
+            duration: Duration::from_millis(50)
         }
-        other => panic!("expected call-timeout error, got {other:?}"),
-    }
+    );
 
+    release_late.send(()).unwrap();
     let second = client
-        .call_typed::<u32, u32>(
+        .call_typed_with_options::<u32, u32>(
             ProgramVersion {
                 program: 100_003,
                 version: 3,
             },
             Procedure(1),
             &22,
+            &CallOptions::new().without_timeout(),
         )
         .await
         .expect("second call should succeed");

@@ -423,3 +423,28 @@ async fn streams_without_vectored_support_use_the_scalar_fallback_without_coales
     .unwrap();
     assert_eq!(writer.0, fragment(b"firstsecond", true));
 }
+
+#[tokio::test]
+async fn cancelled_reads_preserve_each_partial_record_marker() {
+    use std::{future::Future, task::Poll};
+    use tokio::io::{AsyncWriteExt, duplex};
+    for prefix in 0..4 {
+        let (mut input, mut peer) = duplex(128);
+        let wire = fragment(b"data", true);
+        peer.write_all(&wire[..prefix]).await.unwrap();
+        let mut record = RecordReader::new(&mut input, RecordLimits::default()).unwrap();
+        let mut output = [0; 4];
+        {
+            let mut read = Box::pin(record.read_some(&mut output));
+            std::future::poll_fn(|cx| {
+                assert!(read.as_mut().poll(cx).is_pending());
+                Poll::Ready(())
+            })
+            .await;
+        }
+        peer.write_all(&wire[prefix..]).await.unwrap();
+        record.read_exact(&mut output).await.unwrap();
+        assert_eq!(&output, b"data", "marker prefix {prefix}");
+        assert_eq!(record.read_some(&mut [0]).await.unwrap(), 0);
+    }
+}

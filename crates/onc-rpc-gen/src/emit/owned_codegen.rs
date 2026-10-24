@@ -986,12 +986,13 @@ impl StubEmitter {
                 if argument == "()" { "()" } else { "argument" }
             ),
         );
-        line(
+        self.emit_method_docs(
             indent,
-            &mut self.out,
-            format_args!(
-                "/// Send generated XDR segments and decode the result in caller-bounded storage."
+            &format!(
+                "Call RPC `{}` with segmented encoding and a caller-owned reply buffer.",
+                procedure.name
             ),
+            "Decodes the full typed reply; the outcome returns `buffer`, including on error.",
         );
         line(
             indent,
@@ -1009,12 +1010,13 @@ impl StubEmitter {
             format_args!("self.client.call_xdr_segmented::<_, {reply}, B>({call}).await"),
         );
         line(indent, &mut self.out, format_args!("}}"));
-        line(
+        self.emit_method_docs(
             indent,
-            &mut self.out,
-            format_args!(
-                "/// Admit a segmented call immediately, returning both owners on refusal."
+            &format!(
+                "Admit RPC `{}` with segmented encoding, without waiting for capacity.",
+                procedure.name
             ),
+            "Returns an unpolled future, or the unsent request and buffer on refusal.",
         );
         line(
             indent,
@@ -1042,12 +1044,13 @@ impl StubEmitter {
         if let TypeSpec::Identifier(name) = &procedure.return_type {
             if let Some(metadata_name) = self.owned_layouts.metadata_name(name) {
                 let metadata = self.sibling_type(name, &metadata_name);
-                line(
+                self.emit_method_docs(
                     indent,
-                    &mut self.out,
-                    format_args!(
-                        "/// Decode generated metadata and place the terminal opaque body directly in `buffer`."
+                    &format!(
+                        "Call RPC `{}`, placing the reply's opaque body directly in `buffer`.",
+                        procedure.name
                     ),
+                    "Returns typed metadata and the quiescent buffer, including on error.",
                 );
                 line(
                     indent,
@@ -1065,12 +1068,13 @@ impl StubEmitter {
                     format_args!("self.client.call_xdr_into::<_, {metadata}, B>({call}).await"),
                 );
                 line(indent, &mut self.out, format_args!("}}"));
-                line(
+                self.emit_method_docs(
                     indent,
-                    &mut self.out,
-                    format_args!(
-                        "/// Admit immediately; refusal returns the unsent request and original receive owner."
+                    &format!(
+                        "Admit RPC `{}` for direct-body receive, without waiting for capacity.",
+                        procedure.name
                     ),
+                    "Returns an unpolled future, or the unsent request and buffer on refusal.",
                 );
                 line(
                     indent,

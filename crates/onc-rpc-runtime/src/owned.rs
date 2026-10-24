@@ -8,18 +8,26 @@ mod segmented;
 pub use segmented::{CallRefusal, ReceiveOutcome, ReplyReceiver, SegmentedReply, SegmentedRequest};
 
 #[cfg(test)]
-use crate::{AcceptedReply, AcceptedStatus, OpaqueAuth, Procedure, ProgramVersion, ReplyBody};
+use crate::{
+    AcceptedReply, AcceptedStatus, OpaqueAuth, Procedure, ProgramVersion, ReplyBody,
+    write_rpc_message,
+};
 use crate::{
     AsyncClientTransport, CallOptions, ClientConfig, MessageBody, RpcMessage, RuntimeError, Xid,
-    try_decode_message_from_buffer, write_rpc_message,
+    XidAllocator, try_decode_message_from_buffer,
 };
 #[cfg(test)]
 use bytes::Bytes;
 use bytes::BytesMut;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use std::{
     collections::HashMap,
     io,
-    sync::{Arc, Mutex as StdMutex, OnceLock, Weak},
+    sync::{
+        Arc, Mutex as StdMutex, OnceLock, Weak,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::Duration,
 };
 use tokio::{
@@ -27,7 +35,7 @@ use tokio::{
     net::TcpSocket,
     sync::{Mutex, MutexGuard, oneshot},
     task::AbortHandle,
-    time::timeout,
+    time::{Instant, timeout},
 };
 
 // Bound the full record, including fragment markers, before payload allocation.
@@ -88,7 +96,7 @@ impl ResponseSender {
 }
 
 struct Pending {
-    token: Arc<()>,
+    token: Arc<CallControl>,
     sender: Option<ResponseSender>,
 }
 
@@ -99,6 +107,7 @@ struct Replies {
 }
 
 struct State {
+    xids: XidAllocator,
     admission: Admission,
     writer: Mutex<Option<Writer>>,
     replies: StdMutex<Replies>,
@@ -124,8 +133,14 @@ impl State {
         };
         self.admission.close();
         for (_, pending) in pending {
+            pending.token.stop(error.clone());
             if let Some(sender) = pending.sender {
-                sender.fail(error.clone());
+                sender.fail(
+                    pending
+                        .token
+                        .finish(Err::<(), _>(error.clone()))
+                        .unwrap_err(),
+                );
             }
         }
         self.closed.notify_waiters();
@@ -146,45 +161,143 @@ impl Drop for State {
     }
 }
 
-struct PendingCall {
-    retain_reply: bool,
-    state: Arc<State>,
-    xid: Xid,
-    token: Arc<()>,
+// A single terminal decision is shared by the caller and the stream reader.
+// Waking tasks and delivering application owners always happens outside locks.
+#[derive(Default)]
+struct CallControl {
+    terminal: StdMutex<Option<Result<(), RuntimeError>>>,
+    changed: tokio::sync::Notify,
+}
+impl CallControl {
+    fn stop(&self, error: RuntimeError) {
+        let notify = {
+            let mut terminal = self
+                .terminal
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if terminal.is_some() {
+                false
+            } else {
+                *terminal = Some(Err(error));
+                true
+            }
+        };
+        if notify {
+            self.changed.notify_waiters();
+        }
+    }
+    fn error(&self) -> Option<RuntimeError> {
+        self.terminal
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .and_then(|result| result.as_ref().err().cloned())
+    }
+    fn finish<T>(&self, result: Result<T, RuntimeError>) -> Result<T, RuntimeError> {
+        let mut terminal = self
+            .terminal
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match terminal.as_ref() {
+            Some(Err(error)) => Err(error.clone()),
+            _ => {
+                *terminal = Some(Ok(()));
+                result
+            }
+        }
+    }
+    async fn stopped(&self) -> RuntimeError {
+        loop {
+            let changed = self.changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            if let Some(error) = self.error() {
+                return error;
+            }
+            changed.await;
+        }
+    }
 }
 
-impl Drop for PendingCall {
-    fn drop(&mut self) {
-        if self.retain_reply {
-            return;
-        }
+struct PendingCall {
+    state: Arc<State>,
+    xid: Xid,
+    token: Arc<CallControl>,
+}
+impl PendingCall {
+    fn stop(&self, error: RuntimeError) {
+        self.token.stop(error.clone());
         let removed = {
             let mut replies = self.state.replies();
-            if replies.pending.get(&self.xid).is_some_and(|pending| {
-                Arc::ptr_eq(&pending.token, &self.token) && pending.sender.is_some()
-            }) {
+            if replies
+                .pending
+                .get(&self.xid)
+                .is_some_and(|pending| Arc::ptr_eq(&pending.token, &self.token))
+            {
                 replies.pending.remove(&self.xid)
             } else {
                 None
             }
         };
-        // Sender destruction may invoke a custom waker or destroy an application
-        // owner. Neither is allowed to run while the reply registry is locked.
-        drop(removed);
+        if let Some(sender) = removed.and_then(|pending| pending.sender) {
+            sender.fail(self.token.finish(Err::<(), _>(error)).unwrap_err());
+        }
+    }
+}
+impl Drop for PendingCall {
+    fn drop(&mut self) {
+        self.stop(RuntimeError::Cancelled);
     }
 }
 
-// If writing is interrupted, another RPC must never follow a partial frame.
-// Cancellation while waiting for the writer does not construct this guard.
+// Track actual stream writes: dropping before the first byte is harmless;
+// dropping after a partial frame cannot leave that stream reusable.
 struct FrameWrite<'a> {
     state: &'a State,
     writer: MutexGuard<'a, Option<Writer>>,
+    written: &'a AtomicUsize,
     complete: bool,
 }
-
+impl AsyncWrite for FrameWrite<'_> {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bytes: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        let result = Pin::new(self.writer.as_mut().expect("live writer")).poll_write(cx, bytes);
+        if let Poll::Ready(Ok(count)) = result {
+            self.written.fetch_add(count, Ordering::Relaxed);
+        }
+        result
+    }
+    fn poll_write_vectored(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bytes: &[io::IoSlice<'_>],
+    ) -> Poll<io::Result<usize>> {
+        let result =
+            Pin::new(self.writer.as_mut().expect("live writer")).poll_write_vectored(cx, bytes);
+        if let Poll::Ready(Ok(count)) = result {
+            self.written.fetch_add(count, Ordering::Relaxed);
+        }
+        result
+    }
+    fn is_write_vectored(&self) -> bool {
+        self.writer
+            .as_ref()
+            .expect("live writer")
+            .is_write_vectored()
+    }
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(self.writer.as_mut().expect("live writer")).poll_flush(cx)
+    }
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(self.writer.as_mut().expect("live writer")).poll_shutdown(cx)
+    }
+}
 impl Drop for FrameWrite<'_> {
     fn drop(&mut self) {
-        if !self.complete {
+        if !self.complete && self.written.load(Ordering::Relaxed) != 0 {
             self.state.fail(RuntimeError::Transport(
                 "RPC frame write interrupted".into(),
             ));
@@ -196,7 +309,48 @@ impl Drop for FrameWrite<'_> {
     }
 }
 
+struct CallWait<'a> {
+    options: &'a CallOptions,
+    deadline: Option<(Instant, Duration)>,
+}
+impl<'a> CallWait<'a> {
+    fn new(options: &'a CallOptions, default: Option<Duration>) -> Self {
+        Self {
+            options,
+            deadline: options.effective_timeout(default).and_then(|duration| {
+                Instant::now()
+                    .checked_add(duration)
+                    .map(|at| (at, duration))
+            }),
+        }
+    }
+    async fn interrupted(&self) -> RuntimeError {
+        let cancel = async {
+            match &self.options.cancellation {
+                Some(token) => token.cancelled().await,
+                None => std::future::pending().await,
+            }
+        };
+        tokio::select! {
+            biased;
+            () = cancel => RuntimeError::Cancelled,
+            () = wait_deadline(self.deadline.map(|(at, _)| at)) => RuntimeError::CallTimeout { duration: self.deadline.expect("expired deadline").1 },
+        }
+    }
+}
+async fn wait_deadline(deadline: Option<Instant>) {
+    match deadline {
+        Some(at) => tokio::time::sleep_until(at).await,
+        None => std::future::pending().await,
+    }
+}
+
 impl OwnedRpcTransport {
+    /// Shared XID namespace for raw calls and every client using this stream.
+    pub fn xid_allocator(&self) -> XidAllocator {
+        self.state.xids.clone()
+    }
+
     /// Connect using compatibility-mode admission (no configured call/byte limit).
     pub async fn connect(config: &ClientConfig) -> Result<Self, RuntimeError> {
         Self::from_stream(Self::connect_stream(config).await?, config)
@@ -342,6 +496,7 @@ impl OwnedRpcTransport {
         limits.validate()?;
         let (reader, writer) = tokio::io::split(stream);
         let state = Arc::new(State {
+            xids: XidAllocator::new(),
             admission,
             writer: Mutex::new(Some(Box::new(writer))),
             replies: StdMutex::new(Replies::default()),
@@ -357,39 +512,103 @@ impl OwnedRpcTransport {
         })
     }
 
-    async fn write(&self, message: &RpcMessage) -> Result<(), RuntimeError> {
-        tokio::select! {
+    async fn send_segments(
+        &self,
+        segments: &[bytes::Bytes],
+        pending: &PendingCall,
+        wait: &CallWait<'_>,
+    ) -> Result<(), RuntimeError> {
+        let write_deadline = self
+            .write_timeout
+            .and_then(|duration| Instant::now().checked_add(duration));
+        let writer = tokio::select! {
             biased;
-            () = self.wait_closed() => Err(self.state.replies().closed.clone().unwrap_or(RuntimeError::ConnectionClosed)),
-            result = self.write_frame(message) => result,
-        }
-    }
-
-    async fn write_frame(&self, message: &RpcMessage) -> Result<(), RuntimeError> {
-        let writer = self.state.writer.lock().await;
+            error = wait.interrupted() => return Err(error),
+            () = self.wait_closed() => return Err(self.state.replies().closed.clone().unwrap_or(RuntimeError::ConnectionClosed)),
+            () = wait_deadline(write_deadline) => return Err(RuntimeError::WriteTimeout { duration: self.write_timeout.expect("write deadline") }),
+            writer = self.state.writer.lock() => writer,
+        };
         if let Some(error) = self.state.replies().closed.clone() {
             return Err(error);
         }
+        if writer.is_none() {
+            return Err(RuntimeError::ConnectionClosed);
+        }
+        let written = AtomicUsize::new(0);
         let mut frame = FrameWrite {
             state: &self.state,
             writer,
+            written: &written,
             complete: false,
         };
-        let writer = frame
-            .writer
-            .as_mut()
-            .ok_or(RuntimeError::ConnectionClosed)?;
-        let result = write_rpc_message(writer, message).await;
+        let result = {
+            let write = async {
+                crate::record_io::write_segments(&mut frame, segments).await?;
+                tokio::io::AsyncWriteExt::flush(&mut frame)
+                    .await
+                    .map_err(|error| RuntimeError::Transport(error.to_string()))
+            };
+            tokio::pin!(write);
+            // A soft stop does not interrupt a frame. The physical write remains
+            // governed by its separate timeout and explicit connection closure.
+            let mut stopped = false;
+            loop {
+                tokio::select! {
+                    biased;
+                    () = self.wait_closed() => break Err(self.state.replies().closed.clone().unwrap_or(RuntimeError::ConnectionClosed)),
+                    () = wait_deadline(write_deadline) => break Err(RuntimeError::WriteTimeout { duration: self.write_timeout.expect("write deadline") }),
+                    error = wait.interrupted(), if !stopped => {
+                        pending.stop(error.clone());
+                        if written.load(Ordering::Relaxed) == 0 { break Err(error); }
+                        stopped = true;
+                    }
+                    result = &mut write => break result,
+                }
+            }
+        };
         match &result {
             Ok(()) => frame.complete = true,
+            Err(error)
+                if written.load(Ordering::Relaxed) == 0
+                    && matches!(
+                        error,
+                        RuntimeError::Cancelled
+                            | RuntimeError::CallTimeout { .. }
+                            | RuntimeError::WriteTimeout { .. }
+                    ) => {}
             Err(error) => self.state.fail(error.clone()),
         }
         result
+    }
+
+    async fn complete_call<T>(
+        &self,
+        segments: Vec<bytes::Bytes>,
+        pending: &PendingCall,
+        wait: &CallWait<'_>,
+        mut response: oneshot::Receiver<T>,
+    ) -> Result<T, RuntimeError> {
+        if let Err(error) = self.send_segments(&segments, pending, wait).await {
+            pending.stop(error);
+        }
+        drop(segments);
+        tokio::select! {
+            biased;
+            result = &mut response => result.map_err(|_| pending.token.error().unwrap_or(RuntimeError::ConnectionClosed)),
+            error = wait.interrupted() => {
+                pending.stop(error);
+                response.await.map_err(|_| pending.token.error().unwrap_or(RuntimeError::ConnectionClosed))
+            }
+        }
     }
 }
 
 #[async_trait::async_trait]
 impl AsyncClientTransport for OwnedRpcTransport {
+    fn xid_allocator(&self) -> Option<XidAllocator> {
+        Some(OwnedRpcTransport::xid_allocator(self))
+    }
+
     async fn call(&self, request: RpcMessage) -> Result<RpcMessage, RuntimeError> {
         self.call_with_options(request, &CallOptions::default())
             .await
@@ -412,7 +631,7 @@ impl OwnedRpcTransport {
     /// Refusal returns the original message and a typed reason; nothing was sent.
     /// Dropping the admitted, unpolled future releases its capacity. Deadlines
     /// start when it is polled. Existing `call` methods expose refusal as a
-    /// `RuntimeError` without extending that enum or changing generated signatures.
+    /// `RuntimeError` without changing generated signatures.
     #[expect(
         clippy::result_large_err,
         reason = "Returning original owners inline avoids allocating merely to reject a call"
@@ -452,13 +671,9 @@ impl OwnedRpcTransport {
         let transport = self.clone();
         let options = options.clone();
         Ok(async move {
-            let call = transport.call_inner_admitted(request, permit);
-            let result = match options.effective_timeout(transport.default_call_timeout) {
-                Some(duration) => timeout(duration, call).await.map_err(|_| {
-                    RuntimeError::Transport(format!("call timeout after {duration:?}"))
-                })?,
-                None => call.await,
-            };
+            let result = transport
+                .call_inner_admitted(request, &options, permit)
+                .await;
             drop(completion_permit);
             result
         })
@@ -467,10 +682,14 @@ impl OwnedRpcTransport {
     async fn call_inner_admitted(
         &self,
         request: RpcMessage,
+        options: &CallOptions,
         permit: Arc<AdmissionPermit>,
     ) -> Result<RpcMessage, RuntimeError> {
+        // The compatibility path already assembles its request. Owned segments
+        // use the same lifecycle without that assembly.
+        let segments = vec![request.encode().map_err(RuntimeError::Wire)?];
         let (sender, receiver) = oneshot::channel();
-        let token = Arc::new(());
+        let token = Arc::new(CallControl::default());
         {
             let mut replies = self.state.replies();
             if let Some(error) = &replies.closed {
@@ -489,23 +708,19 @@ impl OwnedRpcTransport {
                 },
             );
         }
-        let _pending = PendingCall {
-            retain_reply: false,
+        let pending = PendingCall {
             state: self.state.clone(),
             xid: request.xid,
             token,
         };
-        match self.write_timeout {
-            Some(duration) => timeout(duration, self.write(&request))
-                .await
-                .map_err(|_| {
-                    RuntimeError::Transport(format!("write timeout after {duration:?}"))
-                })??,
-            None => self.write(&request).await?,
-        }
-        // Release input owners and the writer before awaiting the reply.
         drop(request);
-        receiver.await.map_err(|_| RuntimeError::ConnectionClosed)?
+        self.complete_call(
+            segments,
+            &pending,
+            &CallWait::new(options, self.default_call_timeout),
+            receiver,
+        )
+        .await?
     }
 }
 

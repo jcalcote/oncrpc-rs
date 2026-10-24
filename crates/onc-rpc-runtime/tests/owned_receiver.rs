@@ -246,7 +246,7 @@ async fn receiver_errors_and_panics_return_owner_and_retire_reader_generation() 
 }
 
 #[tokio::test(start_paused = true)]
-async fn reply_deadline_returns_quiescent_owner_for_retry_on_new_connection() {
+async fn reply_deadline_returns_quiescent_owner_for_reuse_on_same_connection() {
     let (transport, mut peer) = transport(128);
     let (seen, observed) = oneshot::channel();
     let mut destination = Destination::new(8);
@@ -265,33 +265,34 @@ async fn reply_deadline_returns_quiescent_owner_for_retry_on_new_connection() {
     observed.await.unwrap();
     tokio::time::advance(Duration::from_secs(5)).await;
     let first = call.await;
-    assert!(
-        first
-            .result
-            .unwrap_err()
-            .to_string()
-            .contains("call timeout")
+    assert_eq!(
+        first.result.unwrap_err(),
+        RuntimeError::CallTimeout {
+            duration: Duration::from_secs(5)
+        }
     );
     assert_eq!(first.receiver.bytes.as_ptr(), pointer);
     assert_eq!(first.payload_len, 0);
-    assert!(transport.is_closed());
-    let (retry_transport, mut retry_peer) = self::transport(128);
+    assert!(!transport.is_closed());
+    let mut receiver = first.receiver;
+    receiver.bytes.fill(0x7a);
+    // The late body must drain into scratch, even after the same allocation has
+    // been returned to the caller and reused by another call on this connection.
+    peer.write_all(b"abcdefgh").await.unwrap();
     let server = tokio::spawn(async move {
-        read_rpc_message(&mut retry_peer).await.unwrap();
-        write_rpc_message(&mut retry_peer, &reply(42, b"retry"))
+        assert_eq!(read_rpc_message(&mut peer).await.unwrap().xid, Xid(42));
+        write_rpc_message(&mut peer, &reply(42, b"retry"))
             .await
             .unwrap();
     });
-    let second = retry_transport
-        .call_into(request(42), first.receiver, &CallOptions::default())
+    let second = transport
+        .call_into(request(42), receiver, &CallOptions::default())
         .await;
     assert!(second.result.is_ok());
     assert_eq!(second.receiver.bytes.as_ptr(), pointer);
     assert_eq!(&second.receiver.bytes[..5], b"retry");
-    assert!(
-        peer.write_all(b"abcdefgh").await.is_err(),
-        "retired reader cannot modify returned allocation"
-    );
+    assert_eq!(&second.receiver.bytes[5..], &[0x7a; 3]);
+
     server.await.unwrap();
 }
 
@@ -308,12 +309,11 @@ async fn unsent_deadline_recovers_owner_without_retiring_another_writer() {
     held(queued.as_mut()).await;
     tokio::time::advance(Duration::from_secs(1)).await;
     let outcome = queued.await;
-    assert!(
-        outcome
-            .result
-            .unwrap_err()
-            .to_string()
-            .contains("call timeout")
+    assert_eq!(
+        outcome.result.unwrap_err(),
+        RuntimeError::CallTimeout {
+            duration: Duration::from_secs(1)
+        }
     );
     assert_eq!(outcome.receiver.bytes.as_ptr(), pointer);
     assert!(!transport.is_closed());
@@ -504,12 +504,11 @@ async fn partial_frame_write_deadline_returns_original_owner_after_retirement() 
     held(call.as_mut()).await;
     tokio::time::advance(Duration::from_secs(1)).await;
     let result = call.await;
-    assert!(
-        result
-            .result
-            .unwrap_err()
-            .to_string()
-            .contains("write timeout")
+    assert_eq!(
+        result.result.unwrap_err(),
+        RuntimeError::WriteTimeout {
+            duration: Duration::from_secs(1)
+        }
     );
     assert_eq!(result.receiver.bytes.as_ptr(), pointer);
     assert_eq!(result.payload_len, 0);

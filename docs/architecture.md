@@ -108,12 +108,32 @@ write lock is released before response waiting, permitting concurrent calls
 and out-of-order replies on one connection.
 
 Effective call deadlines cover writer acquisition, frame writing, and response
-waiting. Cancellation or timeout during a frame write makes that stream
-terminal; cancellation while waiting for the writer or for a reply removes
-only the canceled registration. Late replies to canceled calls are ignored.
-Both synchronous and asynchronous clients use a checked atomic XID allocator
-that never wraps; exhaustion requires replacement of client and connection.
-Raw transport users must not deliberately reuse an XID on one connection.
+waiting. `CallOptions` carries an optional `CallCancellation` token for ordinary
+and generated methods alike. Before writing starts, cancellation or a deadline
+removes only the unsent operation. Once a frame is being written, explicit
+cancellation and call deadlines allow the writer to complete it; a hard write
+timeout, I/O failure, or future dropped during that partial write can make the
+stream terminal. After a complete send, cancellation/deadline/drop detaches the
+receive destination after its last access and drains the remaining or late reply.
+A call can return its original destination before the remote response arrives,
+without forcing unrelated calls onto another connection.
+
+Dropping a fully sent call abandons the result and owner return. To cancel and
+recover owned storage, cancel its token and continue awaiting the outcome. A
+logical deadline is not a hard bound on completion of a partial frame; callers
+can configure a write timeout for that physical bound. Cancellation never means
+that the server has stopped or rolled back a procedure.
+
+Built-in transports expose a shared checked `XidAllocator` for each physical
+connection. Synchronous and asynchronous clients constructed from transport
+clones use that same namespace; creating another client does not restart its
+XIDs. The allocator never wraps, so exhaustion requires a new connection. Raw
+callers mixing explicit RPC messages with typed calls must allocate from
+`transport.xid_allocator()` too. Deliberate manual reuse remains unsupported,
+even after cancellation or timeout. Custom transports sharing a connection
+should expose the same allocator through their optional `xid_allocator` trait
+hook; the default `None` keeps an independent client-local fallback. UDP retains its datagram lifecycle: there is no
+TCP frame to finish, and a timed-out or canceled request may still execute.
 
 Default record assembly limits are 128 MiB including record markers and 1,024
 fragments. `RecordLimits`, `from_stream_with_limits`, and
@@ -326,11 +346,13 @@ That should influence API and implementation choices in practical ways:
 
 ## Buffer Ownership Constraint
 
-The additive 0.2.3 caller-owned buffer API is specified in
+The 0.3 caller-owned buffer API is specified in
 [Caller-owned RPC buffers](owned-buffers.md). It separates bounded RPC envelope
 parsing from direct result placement and preserves outstanding destination
 ownership through cancellation and late replies. Existing generated and legacy
-transport APIs keep their existing buffer representations. Additive generated
+transport APIs keep their existing buffer representations. The source migration
+for non-exhaustive call options and errors is documented in
+[Migration guide](migration.md). Additive generated
 methods use metadata projections for a statically bounded prefix and terminal
 opaque body, and segmented encoders retain request owners. The
 [generated API contract](cli-spec.md#generated-caller-owned-client-api) specifies

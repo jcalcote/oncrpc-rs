@@ -2,9 +2,9 @@ use bytes::Bytes;
 use onc_rpc_auth::AuthSys;
 use onc_rpc_runtime::async_trait as runtime_async_trait;
 use onc_rpc_runtime::{
-    AcceptedReply, AcceptedStatus, AsyncClient, AsyncClientTransport, CallOptions, CallTimeout,
-    Client, ClientConfig, ClientTransport, MessageBody, OpaqueAuth, Procedure, ProgramVersion,
-    ReplyBody, RpcMessage, RuntimeError, TokioAsyncClientTransport, Xid,
+    AcceptedReply, AcceptedStatus, AsyncClient, AsyncClientTransport, CallCancellation,
+    CallOptions, Client, ClientConfig, ClientTransport, MessageBody, OpaqueAuth, Procedure,
+    ProgramVersion, ReplyBody, RpcMessage, RuntimeError, TokioAsyncClientTransport, Xid,
 };
 use onc_rpc_server::{
     AsyncDispatch, Dispatch, DispatchError, Program, RequestContext, ServerBuilder,
@@ -195,11 +195,7 @@ fn generated_typed_client_with_options_forwards_call_options() {
     assert_eq!(response, expected_reply);
     assert_eq!(
         *seen_options.lock().expect("mutex poisoned"),
-        Some(CallOptions {
-            timeout: CallTimeout::Duration(std::time::Duration::from_secs(30)),
-            credentials: None,
-            verifier: None,
-        })
+        Some(CallOptions::new().with_timeout(std::time::Duration::from_secs(30)))
     );
 }
 
@@ -239,12 +235,45 @@ fn generated_typed_client_with_auth_sys_forwards_auth_options() {
     assert_eq!(response, expected_reply);
     assert_eq!(
         *seen_options.lock().expect("mutex poisoned"),
-        Some(CallOptions {
-            timeout: CallTimeout::Inherit,
-            credentials: Some(auth_sys.to_opaque_auth().expect("auth sys should encode")),
-            verifier: Some(OpaqueAuth::none()),
-        })
+        Some(
+            CallOptions::new()
+                .with_auth_sys(&auth_sys)
+                .expect("auth sys should encode")
+        )
     );
+}
+
+#[test]
+fn generated_typed_options_preserve_cancellation_identity() {
+    let seen_options = Arc::new(Mutex::new(None));
+    let transport = CaptureTransport {
+        seen: Arc::new(Mutex::new(None)),
+        seen_options: seen_options.clone(),
+        reply_payload: sample_reply().to_xdr_bytes().unwrap(),
+    };
+    let client = Client::new(client_config(), transport);
+    let stub =
+        blob_service_basic_stubs::blob_service::blob_service_v1::client::BLOB_SERVICE_V1Client::new(
+            client,
+        );
+    let token = CallCancellation::new();
+    let options = CallOptions::new().with_cancellation(token.clone());
+    assert_eq!(
+        stub.blob_copy_with_options(sample_request(), &options)
+            .unwrap(),
+        sample_reply()
+    );
+    let forwarded = seen_options
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .cancellation
+        .clone()
+        .unwrap();
+    assert_eq!(forwarded, token);
+    token.cancel();
+    assert!(forwarded.is_cancelled());
 }
 
 struct TypedService {
@@ -388,11 +417,7 @@ async fn generated_async_typed_client_with_options_forwards_call_options() {
     assert_eq!(response, expected_reply);
     assert_eq!(
         *seen_options.lock().expect("mutex poisoned"),
-        Some(CallOptions {
-            timeout: CallTimeout::None,
-            credentials: None,
-            verifier: None,
-        })
+        Some(CallOptions::new().without_timeout())
     );
 }
 

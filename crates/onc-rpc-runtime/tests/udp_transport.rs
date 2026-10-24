@@ -306,7 +306,7 @@ async fn async_udp_transport_times_out_when_no_reply_arrives() {
         .await
         .expect_err("call should time out");
 
-    assert!(matches!(error, RuntimeError::Transport(message) if message.contains("call timeout")));
+    assert!(matches!(error, RuntimeError::CallTimeout { .. }));
 }
 
 #[tokio::test]
@@ -368,7 +368,7 @@ async fn async_udp_transport_drops_malformed_datagrams_and_stays_usable() {
         )
         .await
         .expect_err("first call should time out");
-    assert!(matches!(error, RuntimeError::Transport(message) if message.contains("call timeout")));
+    assert!(matches!(error, RuntimeError::CallTimeout { .. }));
 
     let reply: u32 = client
         .call_typed(

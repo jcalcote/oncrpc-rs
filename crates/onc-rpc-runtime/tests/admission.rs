@@ -329,7 +329,7 @@ async fn legacy_and_owned_calls_share_the_same_connection_budget() {
 }
 
 #[tokio::test]
-async fn abandoned_sent_call_keeps_permit_until_late_reply_quiesces() {
+async fn abandoned_sent_call_releases_capacity_before_late_reply() {
     bounded(async {
         let (transport, mut peer) = limited(128, 1, usize::MAX);
         let (drops, mut dropped) = mpsc::unbounded_channel();
@@ -343,18 +343,25 @@ async fn abandoned_sent_call_keeps_permit_until_late_reply_quiesces() {
         held(operation.as_mut()).await;
         assert_eq!(read_rpc_message(&mut peer).await.unwrap().xid, Xid(1));
         drop(operation);
-        assert_eq!(transport.admission_snapshot().calls, 1);
-        assert!(matches!(
-            dropped.try_recv(),
-            Err(mpsc::error::TryRecvError::Empty)
-        ));
-        let mut ready = Box::pin(transport.wait_for_capacity(charge()));
-        held(ready.as_mut()).await;
-        write_rpc_message(&mut peer, &reply(Xid(1))).await.unwrap();
-        dropped.recv().await.unwrap();
-        ready.await.unwrap();
+        dropped
+            .recv()
+            .await
+            .expect("abandoned receive owner released without a reply");
+        transport.wait_for_capacity(charge()).await.unwrap();
         assert_eq!(transport.admission_snapshot().calls, 0);
         assert_eq!(transport.admission_snapshot().bytes, 0);
+        assert!(!transport.is_closed());
+        let mut second = Box::pin(accepted(transport.try_call_into(
+            request(2),
+            Destination::new(),
+            &CallOptions::default(),
+        )));
+        held(second.as_mut()).await;
+        assert_eq!(read_rpc_message(&mut peer).await.unwrap().xid, Xid(2));
+        write_rpc_message(&mut peer, &reply(Xid(1))).await.unwrap();
+        write_rpc_message(&mut peer, &reply(Xid(2))).await.unwrap();
+        assert!(second.await.result.is_ok());
+        assert_eq!(transport.admission_snapshot().calls, 0);
     })
     .await
 }
@@ -422,7 +429,7 @@ async fn deadline_while_waiting_for_writer_releases_only_its_permit() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn deadline_during_partial_write_closes_and_releases_capacity() {
+async fn call_deadline_during_partial_write_finishes_frame_and_keeps_connection() {
     let (transport, mut peer) = limited(1, 2, usize::MAX);
     let options = CallOptions::default().with_timeout(Duration::from_secs(5));
     let receiver = Destination::new();
@@ -434,18 +441,33 @@ async fn deadline_during_partial_write_closes_and_releases_capacity() {
     )));
     held(operation.as_mut()).await;
     tokio::time::advance(Duration::from_secs(5)).await;
-    let outcome = operation.await;
-    assert!(outcome.result.is_err());
+    held(operation.as_mut()).await;
+    let (outcome, received) = tokio::join!(operation, read_rpc_message(&mut peer));
+    assert_eq!(received.unwrap().xid, Xid(1));
+    assert_eq!(
+        outcome.result.unwrap_err(),
+        RuntimeError::CallTimeout {
+            duration: Duration::from_secs(5)
+        }
+    );
     assert_eq!(outcome.receiver.pointer(), pointer);
-    assert!(transport.is_closed());
+    assert!(!transport.is_closed());
     assert_eq!(transport.admission_snapshot().calls, 0);
-    let mut wire = Vec::new();
-    peer.read_to_end(&mut wire).await.unwrap();
-    assert_eq!(wire.len(), 1);
+    let server = tokio::spawn(async move {
+        assert_eq!(read_rpc_message(&mut peer).await.unwrap().xid, Xid(2));
+        write_rpc_message(&mut peer, &reply(Xid(1))).await.unwrap();
+        write_rpc_message(&mut peer, &reply(Xid(2))).await.unwrap();
+    });
+    let next = transport
+        .call_into(request(2), outcome.receiver, &CallOptions::default())
+        .await;
+    assert!(next.result.is_ok());
+    assert_eq!(next.receiver.pointer(), pointer);
+    server.await.unwrap();
 }
 
 #[tokio::test(start_paused = true)]
-async fn reply_deadline_returns_owner_once_and_fails_other_calls_safely() {
+async fn reply_deadline_returns_owner_once_without_failing_other_calls() {
     let (transport, mut peer) = limited(128, 2, usize::MAX);
     let options = CallOptions::default().with_timeout(Duration::from_secs(5));
     let (drops, mut dropped) = mpsc::unbounded_channel();
@@ -470,10 +492,19 @@ async fn reply_deadline_returns_owner_once_and_fails_other_calls_safely() {
     read_rpc_message(&mut peer).await.unwrap();
     tokio::time::advance(Duration::from_secs(5)).await;
     let first = first.await;
-    let second = second.await;
-    assert!(first.result.is_err());
-    assert!(second.result.is_err());
+    assert_eq!(
+        first.result.as_ref().unwrap_err(),
+        &RuntimeError::CallTimeout {
+            duration: Duration::from_secs(5)
+        }
+    );
     assert_eq!(first.receiver.pointer(), pointer);
+    assert!(!transport.is_closed());
+    assert_eq!(transport.admission_snapshot().calls, 1);
+    write_rpc_message(&mut peer, &reply(Xid(1))).await.unwrap();
+    write_rpc_message(&mut peer, &reply(Xid(2))).await.unwrap();
+    let second = second.await;
+    assert!(second.result.is_ok());
     assert_eq!(second.receiver.pointer(), second_pointer);
     assert_eq!(transport.admission_snapshot().calls, 0);
     assert!(matches!(
@@ -630,12 +661,13 @@ async fn abandoned_receiver_destructor_still_holds_its_admission() {
         let request = read_rpc_message(&mut peer).await.unwrap();
         let required = transport.admission_snapshot().bytes;
         drop(call);
-        write_rpc_message(&mut peer, &reply(request.xid))
-            .await
-            .unwrap();
         assert_eq!(observed.await.unwrap(), AdmissionError::AtCapacity);
         transport.wait_for_capacity(required).await.unwrap();
         assert_eq!(transport.admission_snapshot().calls, 0);
+        assert!(!transport.is_closed());
+        write_rpc_message(&mut peer, &reply(request.xid))
+            .await
+            .unwrap();
     })
     .await;
 }

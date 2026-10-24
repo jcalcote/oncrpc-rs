@@ -447,6 +447,11 @@ impl StubEmitter {
         Ok(())
     }
 
+    fn emit_method_docs(&mut self, indent: usize, summary: &str, detail: &str) {
+        line(indent, &mut self.out, format_args!("/// {summary}"));
+        line(indent, &mut self.out, format_args!("/// {detail}"));
+    }
+
     fn emit_client_method(
         &mut self,
         procedure: &ProcedureDecl,
@@ -463,6 +468,12 @@ impl StubEmitter {
             &format!("{}_ret", method_name),
             indent,
         )?;
+
+        self.emit_method_docs(
+            indent,
+            &format!("Call RPC `{}` and decode its typed reply.", procedure.name),
+            "Blocks until completion using the client's default call policy.",
+        );
 
         if request_type == "()" {
             line(
@@ -495,6 +506,11 @@ impl StubEmitter {
             line(indent, &mut self.out, format_args!("}}"));
             self.out.push('\n');
 
+            self.emit_method_docs(
+                indent,
+                &format!("Call RPC `{}` with explicit call options.", procedure.name),
+                "Options select timeout, authentication and local cancellation policy.",
+            );
             line(
                 indent,
                 &mut self.out,
@@ -554,6 +570,11 @@ impl StubEmitter {
             line(indent, &mut self.out, format_args!("}}"));
             self.out.push('\n');
 
+            self.emit_method_docs(
+                indent,
+                &format!("Call RPC `{}` with explicit call options.", procedure.name),
+                "Options select timeout, authentication and local cancellation policy.",
+            );
             line(
                 indent,
                 &mut self.out,
@@ -605,6 +626,12 @@ impl StubEmitter {
             indent,
         )?;
 
+        self.emit_method_docs(
+            indent,
+            &format!("Call RPC `{}` and decode its typed reply.", procedure.name),
+            "Awaits completion using the client's default call policy.",
+        );
+
         if request_type == "()" {
             line(
                 indent,
@@ -636,6 +663,11 @@ impl StubEmitter {
             line(indent, &mut self.out, format_args!("}}"));
             self.out.push('\n');
 
+            self.emit_method_docs(
+                indent,
+                &format!("Call RPC `{}` with explicit call options.", procedure.name),
+                "Options select timeout, authentication and local cancellation policy.",
+            );
             line(
                 indent,
                 &mut self.out,
@@ -695,6 +727,11 @@ impl StubEmitter {
             line(indent, &mut self.out, format_args!("}}"));
             self.out.push('\n');
 
+            self.emit_method_docs(
+                indent,
+                &format!("Call RPC `{}` with explicit call options.", procedure.name),
+                "Options select timeout, authentication and local cancellation policy.",
+            );
             line(
                 indent,
                 &mut self.out,
@@ -746,6 +783,15 @@ impl StubEmitter {
             indent,
         )?;
 
+        self.emit_method_docs(
+            indent,
+            &format!(
+                "Handle RPC `{}` and return its typed reply.",
+                procedure.name
+            ),
+            "Request metadata is available through `request`.",
+        );
+
         if request_type == "()" {
             line(
                 indent,
@@ -784,6 +830,15 @@ impl StubEmitter {
             &format!("{}_ret", method_name),
             indent,
         )?;
+
+        self.emit_method_docs(
+            indent,
+            &format!(
+                "Handle RPC `{}` and return its typed reply.",
+                procedure.name
+            ),
+            "Request metadata is available through `request`.",
+        );
 
         if request_type == "()" {
             line(

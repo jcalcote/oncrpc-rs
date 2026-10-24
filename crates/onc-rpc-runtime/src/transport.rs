@@ -1,16 +1,49 @@
 use crate::{
     AsyncClientTransport, CallOptions, ClientConfig, ClientTransport, OwnedRpcTransport,
-    RpcMessage, RuntimeError, Xid, decode_rpc_message_datagram, encode_rpc_message_datagram,
+    RpcMessage, RuntimeError, Xid, XidAllocator, decode_rpc_message_datagram,
+    encode_rpc_message_datagram,
 };
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::{Arc, Mutex as StdMutex, mpsc};
 use tokio::net::UdpSocket;
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::oneshot;
 use tokio::time::timeout;
 
-type PendingMap = Arc<Mutex<HashMap<Xid, oneshot::Sender<Result<RpcMessage, RuntimeError>>>>>;
+type PendingMap = Arc<StdMutex<HashMap<Xid, UdpReply>>>;
+
+struct UdpReply {
+    token: Arc<()>,
+    sender: oneshot::Sender<Result<RpcMessage, RuntimeError>>,
+}
+
+/// Remove this registration even when its future is dropped during socket I/O.
+struct UdpPendingCall {
+    pending: PendingMap,
+    xid: Xid,
+    token: Arc<()>,
+}
+impl Drop for UdpPendingCall {
+    fn drop(&mut self) {
+        let removed = {
+            let mut pending = self
+                .pending
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if pending
+                .get(&self.xid)
+                .is_some_and(|entry| Arc::ptr_eq(&entry.token, &self.token))
+            {
+                pending.remove(&self.xid)
+            } else {
+                None
+            }
+        };
+        // A sender's waker must not run while the registry is locked.
+        drop(removed);
+    }
+}
 
 #[derive(Clone)]
 pub struct TokioAsyncClientTransport {
@@ -23,6 +56,7 @@ pub struct TokioAsyncUdpClientTransport {
     pending: PendingMap,
     default_call_timeout: Option<std::time::Duration>,
     write_timeout: Option<std::time::Duration>,
+    xids: XidAllocator,
 }
 
 pub struct TokioClientTransport {
@@ -82,7 +116,7 @@ impl TokioAsyncUdpClientTransport {
         write_timeout: Option<std::time::Duration>,
     ) -> Result<Self, RuntimeError> {
         let socket = Arc::new(socket);
-        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let pending = Arc::new(StdMutex::new(HashMap::new()));
 
         tokio::spawn(udp_reader_task(socket.clone(), pending.clone()));
 
@@ -91,6 +125,7 @@ impl TokioAsyncUdpClientTransport {
             pending,
             default_call_timeout,
             write_timeout,
+            xids: XidAllocator::new(),
         })
     }
 }
@@ -154,6 +189,9 @@ impl Drop for OwnedRuntime {
 
 #[async_trait]
 impl AsyncClientTransport for TokioAsyncClientTransport {
+    fn xid_allocator(&self) -> Option<XidAllocator> {
+        Some(self.inner.xid_allocator())
+    }
     async fn call(&self, request: RpcMessage) -> Result<RpcMessage, RuntimeError> {
         self.inner.call(request).await
     }
@@ -168,6 +206,9 @@ impl AsyncClientTransport for TokioAsyncClientTransport {
 
 #[async_trait]
 impl AsyncClientTransport for TokioAsyncUdpClientTransport {
+    fn xid_allocator(&self) -> Option<XidAllocator> {
+        Some(self.xids.clone())
+    }
     async fn call(&self, request: RpcMessage) -> Result<RpcMessage, RuntimeError> {
         self.call_with_options(request, &CallOptions::default())
             .await
@@ -178,21 +219,72 @@ impl AsyncClientTransport for TokioAsyncUdpClientTransport {
         request: RpcMessage,
         options: &CallOptions,
     ) -> Result<RpcMessage, RuntimeError> {
-        let xid = request.xid;
-        let (tx, rx) = oneshot::channel();
-        self.pending.lock().await.insert(xid, tx);
-
-        let payload = encode_rpc_message_datagram(&request)?;
-        if let Err(error) = send_udp_request(&self.socket, &payload, self.write_timeout).await {
-            self.pending.lock().await.remove(&xid);
-            return Err(error);
+        if options
+            .cancellation
+            .as_ref()
+            .is_some_and(|cancel| cancel.is_cancelled())
+        {
+            return Err(RuntimeError::Cancelled);
         }
-
-        await_reply(&self.pending, xid, rx, options, self.default_call_timeout).await
+        let xid = request.xid;
+        let payload = encode_rpc_message_datagram(&request)?;
+        let (tx, rx) = oneshot::channel();
+        let token = Arc::new(());
+        {
+            let mut pending = self
+                .pending
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if pending.contains_key(&xid) {
+                return Err(RuntimeError::Transport(
+                    "duplicate in-flight RPC XID".into(),
+                ));
+            }
+            pending.insert(
+                xid,
+                UdpReply {
+                    token: token.clone(),
+                    sender: tx,
+                },
+            );
+        }
+        let _registration = UdpPendingCall {
+            pending: self.pending.clone(),
+            xid,
+            token,
+        };
+        let operation = async {
+            send_udp_request(&self.socket, &payload, self.write_timeout).await?;
+            rx.await.map_err(|_| RuntimeError::ConnectionClosed)?
+        };
+        let deadline = async {
+            match options.effective_timeout(self.default_call_timeout) {
+                Some(duration) => timeout(duration, operation)
+                    .await
+                    .map_err(|_| RuntimeError::CallTimeout { duration })?,
+                None => operation.await,
+            }
+        };
+        let cancellation = async {
+            match &options.cancellation {
+                Some(cancel) => cancel.cancelled().await,
+                None => std::future::pending::<()>().await,
+            }
+        };
+        // Cancellation detaches the local waiter. The datagram may already have
+        // reached the server; the remote operation is never undone or resent.
+        tokio::select! {
+            biased;
+            () = cancellation => Err(RuntimeError::Cancelled),
+            result = deadline => result,
+        }
     }
 }
 
 impl ClientTransport for TokioClientTransport {
+    fn xid_allocator(&self) -> Option<XidAllocator> {
+        self.inner.xid_allocator()
+    }
     fn call(&self, request: RpcMessage) -> Result<RpcMessage, RuntimeError> {
         self.call_with_options(request, &CallOptions::default())
     }
@@ -216,6 +308,9 @@ impl ClientTransport for TokioClientTransport {
 }
 
 impl ClientTransport for TokioUdpClientTransport {
+    fn xid_allocator(&self) -> Option<XidAllocator> {
+        self.inner.xid_allocator()
+    }
     fn call(&self, request: RpcMessage) -> Result<RpcMessage, RuntimeError> {
         self.call_with_options(request, &CallOptions::default())
     }
@@ -238,33 +333,6 @@ impl ClientTransport for TokioUdpClientTransport {
     }
 }
 
-async fn await_reply(
-    pending: &PendingMap,
-    xid: Xid,
-    rx: oneshot::Receiver<Result<RpcMessage, RuntimeError>>,
-    options: &CallOptions,
-    default_call_timeout: Option<std::time::Duration>,
-) -> Result<RpcMessage, RuntimeError> {
-    let reply_result = match options.effective_timeout(default_call_timeout) {
-        Some(timeout_duration) => match timeout(timeout_duration, rx).await {
-            Ok(result) => result,
-            Err(_) => {
-                pending.lock().await.remove(&xid);
-                return Err(RuntimeError::Transport(format!(
-                    "call timeout after {:?}",
-                    timeout_duration
-                )));
-            }
-        },
-        None => rx.await,
-    };
-
-    match reply_result {
-        Ok(result) => result,
-        Err(_) => Err(RuntimeError::ConnectionClosed),
-    }
-}
-
 async fn send_udp_request(
     socket: &Arc<UdpSocket>,
     payload: &bytes::Bytes,
@@ -272,9 +340,9 @@ async fn send_udp_request(
 ) -> Result<(), RuntimeError> {
     let write_future = socket.send(payload);
     let write_result = match write_timeout {
-        Some(timeout_duration) => timeout(timeout_duration, write_future).await.map_err(|_| {
-            RuntimeError::Transport(format!("write timeout after {:?}", timeout_duration))
-        })?,
+        Some(duration) => timeout(duration, write_future)
+            .await
+            .map_err(|_| RuntimeError::WriteTimeout { duration })?,
         None => write_future.await,
     };
 
@@ -291,9 +359,14 @@ async fn udp_reader_task(socket: Arc<UdpSocket>, pending: PendingMap) {
 }
 
 async fn fail_pending(pending: &PendingMap, error: RuntimeError) {
-    let mut pending = pending.lock().await;
-    for (_, sender) in pending.drain() {
-        let _ = sender.send(Err(error.clone()));
+    let entries = {
+        let mut pending = pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        std::mem::take(&mut *pending)
+    };
+    for (_, entry) in entries {
+        let _ = entry.sender.send(Err(error.clone()));
     }
 }
 
@@ -315,8 +388,12 @@ async fn udp_reader_loop(socket: Arc<UdpSocket>, pending: PendingMap) -> Result<
             Err(error) => return Err(error),
         };
         let xid = message.xid;
-        if let Some(sender) = pending.lock().await.remove(&xid) {
-            let _ = sender.send(Ok(message));
+        let entry = pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&xid);
+        if let Some(entry) = entry {
+            let _ = entry.sender.send(Ok(message));
         }
     }
 }
@@ -325,5 +402,71 @@ fn udp_unspecified_addr(remote_addr: SocketAddr) -> SocketAddr {
     match remote_addr {
         SocketAddr::V4(_) => SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
         SocketAddr::V6(_) => SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0),
+    }
+}
+
+#[cfg(test)]
+mod udp_cancellation_tests {
+    use super::*;
+    use crate::{CallCancellation, MessageBody, OpaqueAuth, Procedure, ProgramVersion};
+    use bytes::Bytes;
+    use std::time::Duration;
+
+    fn request(xid: u32) -> RpcMessage {
+        RpcMessage {
+            xid: Xid(xid),
+            body: MessageBody::Call(onc_rpc_wire::CallBody::new(
+                ProgramVersion {
+                    program: 42,
+                    version: 1,
+                },
+                Procedure(1),
+                OpaqueAuth::none(),
+                OpaqueAuth::none(),
+                Bytes::new(),
+            )),
+        }
+    }
+
+    #[tokio::test]
+    async fn cancellation_timeout_and_future_drop_remove_udp_waiters() {
+        let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let config = ClientConfig::new(socket.local_addr().unwrap());
+        let transport = TokioAsyncUdpClientTransport::connect(&config)
+            .await
+            .unwrap();
+        for mode in 0..3 {
+            let cancellation = CallCancellation::new();
+            let duration = Duration::from_secs(30);
+            let options = CallOptions::new()
+                .with_cancellation(cancellation.clone())
+                .with_timeout(duration);
+            let mut call = Box::pin(transport.call_with_options(request(mode + 1), &options));
+            let mut bytes = [0; 512];
+            // Actual receipt establishes that the registration and send finished.
+            tokio::select! {
+                result = &mut call => panic!("call completed before server reply: {result:?}"),
+                received = socket.recv_from(&mut bytes) => { received.unwrap(); }
+            }
+            assert_eq!(transport.pending.lock().unwrap().len(), 1);
+            match mode {
+                0 => {
+                    cancellation.cancel();
+                    assert!(matches!(call.await, Err(RuntimeError::Cancelled)));
+                }
+                1 => drop(call),
+                2 => {
+                    // Start virtual time only after socket readiness was observed.
+                    tokio::time::pause();
+                    tokio::time::advance(duration).await;
+                    assert!(
+                        matches!(call.await, Err(RuntimeError::CallTimeout { duration: actual }) if actual == duration)
+                    );
+                    tokio::time::resume();
+                }
+                _ => unreachable!(),
+            }
+            assert!(transport.pending.lock().unwrap().is_empty());
+        }
     }
 }

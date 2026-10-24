@@ -534,6 +534,10 @@ impl TokioAsyncStartTlsServerTransport {
 
 #[async_trait]
 impl AsyncClientTransport for TokioAsyncTlsClientTransport {
+    fn xid_allocator(&self) -> Option<onc_rpc_runtime::XidAllocator> {
+        Some(self.inner.xid_allocator())
+    }
+
     async fn call(&self, request: RpcMessage) -> Result<RpcMessage, RuntimeError> {
         self.inner.call(request).await
     }
@@ -547,6 +551,10 @@ impl AsyncClientTransport for TokioAsyncTlsClientTransport {
 }
 
 impl ClientTransport for TokioTlsClientTransport {
+    fn xid_allocator(&self) -> Option<onc_rpc_runtime::XidAllocator> {
+        self.inner.xid_allocator()
+    }
+
     fn call(&self, request: RpcMessage) -> Result<RpcMessage, RuntimeError> {
         self.call_with_options(request, &CallOptions::default())
     }
@@ -568,6 +576,10 @@ impl ClientTransport for TokioTlsClientTransport {
 
 #[async_trait]
 impl AsyncClientTransport for TokioAsyncStartTlsClientTransport {
+    fn xid_allocator(&self) -> Option<onc_rpc_runtime::XidAllocator> {
+        Some(self.inner.xid_allocator())
+    }
+
     async fn call(&self, request: RpcMessage) -> Result<RpcMessage, RuntimeError> {
         self.inner.call(request).await
     }
@@ -581,6 +593,10 @@ impl AsyncClientTransport for TokioAsyncStartTlsClientTransport {
 }
 
 impl ClientTransport for TokioStartTlsClientTransport {
+    fn xid_allocator(&self) -> Option<onc_rpc_runtime::XidAllocator> {
+        self.inner.xid_allocator()
+    }
+
     fn call(&self, request: RpcMessage) -> Result<RpcMessage, RuntimeError> {
         self.call_with_options(request, &CallOptions::default())
     }
@@ -1607,6 +1623,87 @@ mod tests {
                 .unwrap()
                 .unwrap();
         }
+    }
+
+    #[tokio::test]
+    async fn tls_and_starttls_cancel_one_call_and_share_xids_across_clients() {
+        use onc_rpc_runtime::{CallCancellation, CallRequest, read_rpc_message};
+        async fn exercise<T: AsyncClientTransport + Clone>(
+            transport: T,
+            config: ClientConfig,
+            received: tokio::sync::oneshot::Receiver<()>,
+        ) {
+            let first = AsyncClient::new(config.clone(), transport.clone());
+            let cancellation = CallCancellation::new();
+            let options = CallOptions::new().with_cancellation(cancellation.clone());
+            let request = || CallRequest::new(test_program(), test_procedure(), Bytes::new());
+            let call =
+                tokio::spawn(async move { first.call_with_options(request(), &options).await });
+            received.await.unwrap();
+            cancellation.cancel();
+            assert_eq!(call.await.unwrap(), Err(RuntimeError::Cancelled));
+            let second = AsyncClient::new(config, transport);
+            let outcome = second.call(request()).await.unwrap();
+            assert_eq!(outcome.payload.as_ref(), b"current");
+        }
+        timeout(Duration::from_secs(10), async {
+            for starttls in [false, true] {
+                let (client_tls, server_tls) = tls_configs();
+                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let config = ClientConfig::new(listener.local_addr().unwrap());
+                let (received, readiness) = tokio::sync::oneshot::channel();
+                let server = tokio::spawn(async move {
+                    let (mut stream, _) = listener.accept().await.unwrap();
+                    if starttls {
+                        accept_probe(&mut stream).await;
+                    }
+                    let mut tls = TlsAcceptor::from(server_tls.tls_config)
+                        .accept(stream)
+                        .await
+                        .unwrap();
+                    let first = read_rpc_message(&mut tls).await.unwrap();
+                    received.send(()).unwrap();
+                    let second = read_rpc_message(&mut tls).await.unwrap();
+                    assert_ne!(first.xid, second.xid);
+                    for (xid, data) in [(first.xid, &b"late"[..]), (second.xid, &b"current"[..])] {
+                        let reply = RpcMessage {
+                            xid,
+                            body: MessageBody::Reply(ReplyBody::Accepted(AcceptedReply {
+                                verifier: OpaqueAuth::none(),
+                                status: AcceptedStatus::Success(Bytes::copy_from_slice(data)),
+                            })),
+                        };
+                        write_rpc_message(&mut tls, &reply).await.unwrap();
+                    }
+                });
+                if starttls {
+                    exercise(
+                        TokioAsyncStartTlsClientTransport::connect(
+                            &config,
+                            &client_tls,
+                            test_program(),
+                        )
+                        .await
+                        .unwrap(),
+                        config,
+                        readiness,
+                    )
+                    .await;
+                } else {
+                    exercise(
+                        TokioAsyncTlsClientTransport::connect(&config, &client_tls)
+                            .await
+                            .unwrap(),
+                        config,
+                        readiness,
+                    )
+                    .await;
+                }
+                server.await.unwrap();
+            }
+        })
+        .await
+        .expect("TLS cancellation must not hang");
     }
 
     #[tokio::test(flavor = "multi_thread")]

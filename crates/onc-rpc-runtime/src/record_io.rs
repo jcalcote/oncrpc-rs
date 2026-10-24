@@ -2,7 +2,8 @@
 use crate::{MAX_FRAGMENT_LEN, RecordLimits, RuntimeError};
 use bytes::Bytes;
 use std::io::{self, IoSlice};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use std::pin::Pin;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
 
 /// One record's cursor. Dropping an unfinished cursor does not resynchronize the
 /// stream: its owner must retire the connection rather than start another record.
@@ -13,6 +14,8 @@ pub(crate) struct RecordReader<'a, R: AsyncRead + Unpin> {
     record_bytes: usize,
     remaining: usize,
     last: bool,
+    marker: [u8; 4],
+    marker_used: usize,
 }
 
 impl<'a, R: AsyncRead + Unpin> RecordReader<'a, R> {
@@ -27,6 +30,8 @@ impl<'a, R: AsyncRead + Unpin> RecordReader<'a, R> {
             record_bytes: 0,
             remaining: 0,
             last: false,
+            marker: [0; 4],
+            marker_used: 0,
         })
     }
 
@@ -61,12 +66,21 @@ impl<'a, R: AsyncRead + Unpin> RecordReader<'a, R> {
                     "RPC record has too many fragments".into(),
                 ));
             }
-            let mut marker = [0; 4];
-            self.reader
-                .read_exact(&mut marker)
-                .await
-                .map_err(read_error)?;
-            let marker = u32::from_be_bytes(marker);
+            // Persist partial markers across cancelled read futures. `read`
+            // consumes no bytes when it returns Pending, unlike read_exact.
+            while self.marker_used < self.marker.len() {
+                let count = self
+                    .reader
+                    .read(&mut self.marker[self.marker_used..])
+                    .await
+                    .map_err(read_error)?;
+                if count == 0 {
+                    return Err(RuntimeError::ConnectionClosed);
+                }
+                self.marker_used += count;
+            }
+            let marker = u32::from_be_bytes(self.marker);
+            self.marker_used = 0;
             let length = usize::try_from(marker & MAX_FRAGMENT_LEN)
                 .map_err(|_| RuntimeError::Transport("RPC fragment length overflow".into()))?;
             self.record_bytes = self
@@ -115,27 +129,37 @@ pub(crate) async fn write_segments<W: AsyncWrite + Unpin + ?Sized>(
     let mut index = 0;
     let mut offset = 0;
     loop {
-        let mut slices = [IoSlice::new(&[]); 64];
-        let mut count = 0;
-        for current in index..=segments.len() {
-            let bytes = if current == 0 {
-                &marker[..]
-            } else {
-                &segments[current - 1][..]
-            };
-            let bytes = &bytes[if current == index { offset } else { 0 }..];
-            if !bytes.is_empty() {
-                slices[count] = IoSlice::new(bytes);
-                count += 1;
-                if count == slices.len() {
-                    break;
-                }
-            }
-        }
-        if count == 0 {
+        if index > segments.len() {
             return Ok(());
         }
-        let mut written = match writer.write_vectored(&slices[..count]).await {
+        // Slice descriptors are needed only while polling the writer. Keeping
+        // them inside the poll closure avoids a 64-entry array in every suspended
+        // call's future; segment owners remain in the surrounding call.
+        let result = std::future::poll_fn(|cx| {
+            let mut slices = [IoSlice::new(&[]); 64];
+            let mut count = 0;
+            for current in index..=segments.len() {
+                let bytes = if current == 0 {
+                    &marker[..]
+                } else {
+                    &segments[current - 1][..]
+                };
+                let bytes = &bytes[if current == index { offset } else { 0 }..];
+                if !bytes.is_empty() {
+                    slices[count] = IoSlice::new(bytes);
+                    count += 1;
+                    if count == slices.len() {
+                        break;
+                    }
+                }
+            }
+            if count == 0 {
+                return std::task::Poll::Ready(Ok(0));
+            }
+            Pin::new(&mut *writer).poll_write_vectored(cx, &slices[..count])
+        })
+        .await;
+        let mut written = match result {
             Ok(0) => {
                 return Err(RuntimeError::Transport(
                     "RPC frame write returned zero".into(),

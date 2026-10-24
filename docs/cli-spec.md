@@ -132,7 +132,7 @@ By default this means:
 - synchronous and asynchronous server traits and dispatch glue
 
 Generated client stubs also include `_with_options(...)` variants for
-request-level timeout and auth overrides.
+request-level timeout, authentication and cancellation options.
 
 If the input schema pulls in additional `.x` files through includes, generation
 should emit the reachable sibling Rust type modules needed to represent those
@@ -359,6 +359,14 @@ This keeps simple methods short while allowing request-level timeout policy to
 inherit the client default, disable the timeout for a specific call, or apply
 an explicit override.
 
+In 0.3, `CallOptions::with_cancellation(token)` also carries a per-call
+`CallCancellation` token. Existing `_with_options` methods and the options
+argument on caller-owned methods forward it to the runtime. The generator does
+not add redundant cancellation-specific methods. Use `CallOptions` builders;
+the options type and `RuntimeError` are non-exhaustive. The
+[migration guide](migration.md) documents error matching, custom transport
+support and the distinction between local cancellation and remote execution.
+
 The intended direction is:
 
 - keep the synchronous client modules and types
@@ -434,8 +442,12 @@ signatures and representations.
 
 `B` implements `AsMut<[u8]> + Send + 'static`. Every completed outcome returns
 that original owner after the last library access, including on transport,
-RPC, decode and admission failures. Dropping a future abandons that return;
-the transport's cancellation and connection-closure contract still applies.
+RPC, decode, cancellation, deadline and admission failures. To cancel and
+recover the buffer, cancel the token and await the owned outcome. Dropping the
+future abandons that return. A fully sent call detaches its destination after
+the reader's last access and drains late data without closing a healthy shared
+connection. A partial outbound frame follows the runtime's distinct
+[cancellation and hard write-timeout rules](owned-buffers.md#limits-and-failure).
 
 Receive projections support one terminal variable opaque body through named
 structs, typedefs and finite unions, including body-free error arms. The control
