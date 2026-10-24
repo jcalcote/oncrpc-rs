@@ -204,6 +204,20 @@ admission; explicit limited constructors apply the shared budget to legacy and
 owned-receiver calls alike. See [the ownership contract](docs/owned-buffers.md)
 for cancellation, deadlines, migration and ordinary kernel/TLS copy boundaries.
 
+### Connection closure and cancellation
+
+`close()` marks the shared connection terminal and requests I/O cancellation;
+it affects every pending call on that connection. `wait_closed()` observes that
+terminal state, not completion of buffer cleanup. To cancel and recover a
+caller-owned destination, call `close()` and continue awaiting the owned call's
+future. Its `ReceiveOutcome` returns the original receiver only after the last
+library access; dropping the future abandons that ownership return.
+
+Admission refusal leaves the connection open. An interrupted request frame or an
+owned-call deadline after writing starts retires it. See the
+[connection lifecycle contract](docs/owned-buffers.md#limits-and-failure) for the
+full timeout and cleanup behavior.
+
 ## Third-Party Dependencies
 
 Current Rust dependencies are intentionally small:
