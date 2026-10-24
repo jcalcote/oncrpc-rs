@@ -10,7 +10,8 @@ use std::fmt::Write;
 pub fn emit_rust_types(schema: &Schema) -> Result<String, GeneratorError> {
     let mut emitter = TypeEmitter::new(schema);
     emitter.emit_schema(schema)?;
-    Ok(emitter.out)
+    emitter.emit_metadata(schema, &owned_codegen::OwnedLayouts::from_schema(schema))?;
+    Ok(finish_output(emitter.out))
 }
 
 pub fn emit_rust_types_for_module(
@@ -19,13 +20,22 @@ pub fn emit_rust_types_for_module(
 ) -> Result<String, GeneratorError> {
     let mut emitter = TypeEmitter::new_for_module(module, loaded);
     emitter.emit_schema(&module.schema)?;
-    Ok(emitter.out)
+    let schemas: Vec<_> = loaded
+        .modules
+        .iter()
+        .map(|module| module.schema.clone())
+        .collect();
+    emitter.emit_metadata(
+        &module.schema,
+        &owned_codegen::OwnedLayouts::from_modules(&schemas),
+    )?;
+    Ok(finish_output(emitter.out))
 }
 
 pub fn emit_rust_stubs(schema: &Schema) -> Result<String, GeneratorError> {
     let mut emitter = StubEmitter::new(schema, true, true);
     emitter.emit_schema(schema)?;
-    Ok(emitter.out)
+    Ok(finish_output(emitter.out))
 }
 
 pub fn emit_rust_stubs_with_options(
@@ -35,7 +45,7 @@ pub fn emit_rust_stubs_with_options(
 ) -> Result<String, GeneratorError> {
     let mut emitter = StubEmitter::new(schema, emit_client, emit_server);
     emitter.emit_schema(schema)?;
-    Ok(emitter.out)
+    Ok(finish_output(emitter.out))
 }
 
 pub fn emit_rust_stubs_for_module(
@@ -44,7 +54,7 @@ pub fn emit_rust_stubs_for_module(
 ) -> Result<String, GeneratorError> {
     let mut emitter = StubEmitter::new_for_module(module, loaded, true, true);
     emitter.emit_schema(&module.schema)?;
-    Ok(emitter.out)
+    Ok(finish_output(emitter.out))
 }
 
 pub fn emit_rust_stubs_for_module_with_options(
@@ -55,7 +65,7 @@ pub fn emit_rust_stubs_for_module_with_options(
 ) -> Result<String, GeneratorError> {
     let mut emitter = StubEmitter::new_for_module(module, loaded, emit_client, emit_server);
     emitter.emit_schema(&module.schema)?;
-    Ok(emitter.out)
+    Ok(finish_output(emitter.out))
 }
 
 struct StubEmitter {
@@ -64,6 +74,7 @@ struct StubEmitter {
     type_owners: BTreeMap<String, String>,
     emit_client: bool,
     emit_server: bool,
+    owned_layouts: owned_codegen::OwnedLayouts,
 }
 
 impl StubEmitter {
@@ -79,6 +90,7 @@ impl StubEmitter {
             }]),
             emit_client,
             emit_server,
+            owned_layouts: owned_codegen::OwnedLayouts::from_schema(schema),
         }
     }
 
@@ -94,6 +106,13 @@ impl StubEmitter {
             type_owners: build_type_owners(&loaded.modules),
             emit_client,
             emit_server,
+            owned_layouts: owned_codegen::OwnedLayouts::from_modules(
+                &loaded
+                    .modules
+                    .iter()
+                    .map(|m| m.schema.clone())
+                    .collect::<Vec<_>>(),
+            ),
         }
     }
 
@@ -130,6 +149,9 @@ impl StubEmitter {
     }
 
     fn emit_version(&mut self, version: &VersionDecl, indent: usize) -> Result<(), GeneratorError> {
+        if self.emit_client {
+            self.validate_owned_method_names(version)?;
+        }
         let module_name = to_snake_case(&version.name);
         let client_name = format!("{}Client", version.name);
         let service_name = format!("{}Service", version.name);
@@ -242,6 +264,19 @@ impl StubEmitter {
                 self.emit_async_client_method(procedure, indent + 12)?;
             }
 
+            line(indent + 8, &mut self.out, format_args!("}}"));
+            self.out.push('\n');
+            line(
+                indent + 8,
+                &mut self.out,
+                format_args!(
+                    "impl {}<onc_rpc_runtime::OwnedRpcTransport> {{",
+                    client_name
+                ),
+            );
+            for procedure in &version.procedures {
+                self.emit_owned_client_methods(procedure, indent + 12)?;
+            }
             line(indent + 8, &mut self.out, format_args!("}}"));
             self.out.push('\n');
             line(indent + 4, &mut self.out, format_args!("}}"));
@@ -1019,6 +1054,8 @@ struct TypeEmitter {
     current_module: Option<String>,
     type_owners: BTreeMap<String, String>,
     const_owners: BTreeMap<String, String>,
+    metadata_only: bool,
+    segment_projection_names: BTreeSet<String>,
 }
 
 #[derive(Clone)]
@@ -1051,6 +1088,8 @@ impl TypeEmitter {
             current_module: None,
             type_owners: BTreeMap::new(),
             const_owners: BTreeMap::new(),
+            metadata_only: false,
+            segment_projection_names: BTreeSet::new(),
         }
     }
 
@@ -1072,6 +1111,8 @@ impl TypeEmitter {
             current_module: Some(module.module_name.clone()),
             type_owners: build_type_owners(&loaded.modules),
             const_owners: build_const_owners(&loaded.modules),
+            metadata_only: false,
+            segment_projection_names: BTreeSet::new(),
         }
     }
 
@@ -1247,6 +1288,9 @@ impl TypeEmitter {
         line(indent, &mut self.out, format_args!("}}"));
         self.out.push('\n');
         self.emit_struct_xdr_impl(name, body, indent)?;
+        if !self.metadata_only {
+            self.emit_segmented_struct(name, body, indent)?;
+        }
         Ok(())
     }
 
@@ -1278,6 +1322,7 @@ impl TypeEmitter {
         line(indent, &mut self.out, format_args!("}}"));
         self.out.push('\n');
         self.emit_enum_xdr_impl(name, body, indent);
+        self.emit_segmented_enum(name, indent);
         Ok(())
     }
 
@@ -1368,6 +1413,9 @@ impl TypeEmitter {
         line(indent, &mut self.out, format_args!("}}"));
         self.out.push('\n');
         self.emit_union_xdr_impl(name, body, &discriminant_type, indent)?;
+        if !self.metadata_only {
+            self.emit_segmented_union(name, body, indent)?;
+        }
         Ok(())
     }
 
@@ -1610,32 +1658,33 @@ impl TypeEmitter {
         body: &StructBody,
         indent: usize,
     ) -> Result<(), GeneratorError> {
-        line(
-            indent,
-            &mut self.out,
-            format_args!("impl XdrEncode for {} {{", name),
-        );
-        line(
-            indent + 4,
-            &mut self.out,
-            format_args!(
-                "fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {{"
-            ),
-        );
-        for declaration in &body.declarations {
-            let field_name = rust_ident(&declaration.declarator.name);
-            self.emit_encode_declaration(
-                &declaration.type_spec,
-                &declaration.declarator,
-                &format!("self.{field_name}"),
-                indent + 8,
-            )?;
+        if !self.metadata_only {
+            line(
+                indent,
+                &mut self.out,
+                format_args!("impl XdrEncode for {} {{", name),
+            );
+            line(
+                indent + 4,
+                &mut self.out,
+                format_args!(
+                    "fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {{"
+                ),
+            );
+            for declaration in &body.declarations {
+                let field_name = rust_ident(&declaration.declarator.name);
+                self.emit_encode_declaration(
+                    &declaration.type_spec,
+                    &declaration.declarator,
+                    &format!("self.{field_name}"),
+                    indent + 8,
+                )?;
+            }
+            line(indent + 8, &mut self.out, format_args!("Ok(())"));
+            line(indent + 4, &mut self.out, format_args!("}}"));
+            line(indent, &mut self.out, format_args!("}}"));
+            self.out.push('\n');
         }
-        line(indent + 8, &mut self.out, format_args!("Ok(())"));
-        line(indent + 4, &mut self.out, format_args!("}}"));
-        line(indent, &mut self.out, format_args!("}}"));
-        self.out.push('\n');
-
         line(
             indent,
             &mut self.out,
@@ -1737,48 +1786,82 @@ impl TypeEmitter {
     ) -> Result<(), GeneratorError> {
         let decode_discriminant_type = self.union_decode_discriminant_type(body, discriminant_type);
         let decode_uses_raw_enum = decode_discriminant_type != discriminant_type;
-        line(
-            indent,
-            &mut self.out,
-            format_args!("impl XdrEncode for {} {{", name),
-        );
-        line(
-            indent + 4,
-            &mut self.out,
-            format_args!(
-                "fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {{"
-            ),
-        );
-        line(indent + 8, &mut self.out, format_args!("match self {{"));
-        for arm in &body.arms {
-            let hint = format!("{}_{}", name, arm.declaration.declarator.name);
-            let rust_type = self.rust_type_for_declaration(
-                &arm.declaration.type_spec,
-                &arm.declaration.declarator,
-                &hint,
+        if !self.metadata_only {
+            line(
                 indent,
-            )?;
-            for label in &arm.labels {
-                let variant_name = union_variant_name(label);
-                let disc = self.render_union_label(label, &body.discriminant.type_spec);
-                if matches!(label, UnionCaseLabel::Default) {
-                    if rust_type == "()" {
+                &mut self.out,
+                format_args!("impl XdrEncode for {} {{", name),
+            );
+            line(
+                indent + 4,
+                &mut self.out,
+                format_args!(
+                    "fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {{"
+                ),
+            );
+            line(indent + 8, &mut self.out, format_args!("match self {{"));
+            for arm in &body.arms {
+                let hint = format!("{}_{}", name, arm.declaration.declarator.name);
+                let rust_type = self.rust_type_for_declaration(
+                    &arm.declaration.type_spec,
+                    &arm.declaration.declarator,
+                    &hint,
+                    indent,
+                )?;
+                for label in &arm.labels {
+                    let variant_name = union_variant_name(label);
+                    let disc = self.render_union_label(label, &body.discriminant.type_spec);
+                    if matches!(label, UnionCaseLabel::Default) {
+                        if rust_type == "()" {
+                            line(
+                                indent + 12,
+                                &mut self.out,
+                                format_args!("Self::{} {{ discriminant }} => {{", variant_name),
+                            );
+                            line(
+                                indent + 16,
+                                &mut self.out,
+                                format_args!("discriminant.encode_xdr(output)?;"),
+                            );
+                        } else {
+                            line(
+                                indent + 12,
+                                &mut self.out,
+                                format_args!(
+                                    "Self::{} {{ discriminant, {} }} => {{",
+                                    variant_name,
+                                    rust_ident(&arm.declaration.declarator.name)
+                                ),
+                            );
+                            line(
+                                indent + 16,
+                                &mut self.out,
+                                format_args!("discriminant.encode_xdr(output)?;"),
+                            );
+                            self.emit_encode_declaration(
+                                &arm.declaration.type_spec,
+                                &arm.declaration.declarator,
+                                rust_ident(&arm.declaration.declarator.name).as_str(),
+                                indent + 16,
+                            )?;
+                        }
+                    } else if rust_type == "()" {
                         line(
                             indent + 12,
                             &mut self.out,
-                            format_args!("Self::{} {{ discriminant }} => {{", variant_name),
+                            format_args!("Self::{} => {{", variant_name),
                         );
                         line(
                             indent + 16,
                             &mut self.out,
-                            format_args!("discriminant.encode_xdr(output)?;"),
+                            format_args!("({}).encode_xdr(output)?;", disc),
                         );
                     } else {
                         line(
                             indent + 12,
                             &mut self.out,
                             format_args!(
-                                "Self::{} {{ discriminant, {} }} => {{",
+                                "Self::{} {{ {} }} => {{",
                                 variant_name,
                                 rust_ident(&arm.declaration.declarator.name)
                             ),
@@ -1786,7 +1869,7 @@ impl TypeEmitter {
                         line(
                             indent + 16,
                             &mut self.out,
-                            format_args!("discriminant.encode_xdr(output)?;"),
+                            format_args!("({}).encode_xdr(output)?;", disc),
                         );
                         self.emit_encode_declaration(
                             &arm.declaration.type_spec,
@@ -1795,48 +1878,15 @@ impl TypeEmitter {
                             indent + 16,
                         )?;
                     }
-                } else if rust_type == "()" {
-                    line(
-                        indent + 12,
-                        &mut self.out,
-                        format_args!("Self::{} => {{", variant_name),
-                    );
-                    line(
-                        indent + 16,
-                        &mut self.out,
-                        format_args!("({}).encode_xdr(output)?;", disc),
-                    );
-                } else {
-                    line(
-                        indent + 12,
-                        &mut self.out,
-                        format_args!(
-                            "Self::{} {{ {} }} => {{",
-                            variant_name,
-                            rust_ident(&arm.declaration.declarator.name)
-                        ),
-                    );
-                    line(
-                        indent + 16,
-                        &mut self.out,
-                        format_args!("({}).encode_xdr(output)?;", disc),
-                    );
-                    self.emit_encode_declaration(
-                        &arm.declaration.type_spec,
-                        &arm.declaration.declarator,
-                        rust_ident(&arm.declaration.declarator.name).as_str(),
-                        indent + 16,
-                    )?;
+                    line(indent + 16, &mut self.out, format_args!("Ok(())"));
+                    line(indent + 12, &mut self.out, format_args!("}}"));
                 }
-                line(indent + 16, &mut self.out, format_args!("Ok(())"));
-                line(indent + 12, &mut self.out, format_args!("}}"));
             }
+            line(indent + 8, &mut self.out, format_args!("}}"));
+            line(indent + 4, &mut self.out, format_args!("}}"));
+            line(indent, &mut self.out, format_args!("}}"));
+            self.out.push('\n');
         }
-        line(indent + 8, &mut self.out, format_args!("}}"));
-        line(indent + 4, &mut self.out, format_args!("}}"));
-        line(indent, &mut self.out, format_args!("}}"));
-        self.out.push('\n');
-
         line(
             indent,
             &mut self.out,
@@ -1946,7 +1996,13 @@ impl TypeEmitter {
                     ),
                 );
             }
-        } else {
+        } else if !(decode_discriminant_type == "bool"
+            && ["true", "false"].iter().all(|value| {
+                body.arms.iter().flat_map(|arm| &arm.labels).any(|label| {
+                    self.render_union_label(label, &body.discriminant.type_spec) == *value
+                })
+            }))
+        {
             line(
                 indent + 12,
                 &mut self.out,
@@ -2415,4 +2471,13 @@ fn build_const_owners(modules: &[LoadedModule]) -> BTreeMap<String, String> {
     }
 
     owners
+}
+
+mod owned_codegen;
+
+fn finish_output(mut output: String) -> String {
+    while output.ends_with("\n\n") {
+        output.pop();
+    }
+    output
 }

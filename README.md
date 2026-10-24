@@ -188,21 +188,36 @@ that parse small application headers and then select caller-owned data slices.
 `ReceiveOutcome` returns the original receiver after the final library access,
 on success or failure. `call_segmented` is the fixed-segment convenience API.
 
-Run the self-contained [owned-buffer example](examples/owned-buffers/src/main.rs):
+The generator also emits typed caller-owned methods: `*_into` receives a
+terminal opaque result directly into supplied storage; `*_segmented` retains
+opaque request owners and uses supplied storage for the ordinary typed reply.
+Their `try_*` variants perform immediate admission. Generated metadata types
+preserve the protocol's status unions and control fields; no application-written
+XDR receiver is needed. See [the generated API contract](docs/cli-spec.md#generated-caller-owned-client-api)
+for supported layouts and multi-owner opaque arguments.
+
+The [owned-buffer example](examples/owned-buffers/buffer_echo.x) follows the
+time-service example: separate TCP programs share an `.x` protocol and generated
+interfaces. Start the [server](examples/owned-buffers/src/bin/buffer-server.rs):
 
 ```bash
-cargo run -p owned-buffers-example
+cargo run -p owned-buffers-example --bin buffer-server
 ```
 
-It uses an in-memory RPC echo peer, sends owned segments, receives directly into
-the original data allocation and demonstrates ownership recovery after failure.
-No external service is required. The example also configures per-connection
-`AdmissionLimits`, handles typed refusal from `try_call_into`, and retries the
-returned owners after capacity becomes available. Congestion never closes the
-connection automatically. Existing constructors retain compatibility-mode
-admission; explicit limited constructors apply the shared budget to legacy and
-owned-receiver calls alike. See [the ownership contract](docs/owned-buffers.md)
-for cancellation, deadlines, migration and ordinary kernel/TLS copy boundaries.
+In another terminal, run the [client](examples/owned-buffers/src/bin/buffer-client.rs):
+
+```bash
+cargo run -p owned-buffers-example --bin buffer-client -- 127.0.0.1:4001 hello
+```
+
+The optional message accepts up to 64 UTF-8 bytes. The generated client sends
+retained segments, receives into the original data allocation, handles admission
+refusal and retries the returned owners after capacity becomes available.
+Congestion never closes the connection automatically. Existing constructors
+retain admission without configured ceilings; explicit limited constructors
+apply the shared budget to legacy and caller-owned calls alike. See
+[the ownership contract](docs/owned-buffers.md) for cancellation, deadlines,
+migration and ordinary kernel/TLS copy boundaries.
 
 ### Connection closure and cancellation
 
@@ -248,10 +263,10 @@ push to `main`:
 - `cargo clippy --workspace --all-targets -- -D warnings`
 - `cargo test --workspace`
 - `cargo check --workspace`
-- the owned-buffer/admission example and warning-free API documentation
+- separate owned-buffer client/server smoke tests and warning-free API documentation
 
 A separate minimum-Rust job checks the library workspace, runtime contract tests
-and standalone example on Rust 1.85.0. Full workspace tests use current stable
+and client/server smoke tests on Rust 1.85.0. Full workspace tests use current stable
 Rust because certificate-generation test dependencies can require a newer
 compiler than the libraries themselves.
 
@@ -264,8 +279,8 @@ Tag pushes matching `v*` trigger a release workflow that:
 - optionally publishes the crates to `crates.io` when a `CRATES_IO_TOKEN`
   repository secret is configured
 
-The example crate under `examples/time-service/` is intentionally excluded from
-publication.
+The example crates under `examples/time-service/` and `examples/owned-buffers/`
+are intentionally excluded from publication.
 
 ## Development
 

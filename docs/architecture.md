@@ -330,7 +330,11 @@ The additive 0.2.3 caller-owned buffer API is specified in
 [Caller-owned RPC buffers](owned-buffers.md). It separates bounded RPC envelope
 parsing from direct result placement and preserves outstanding destination
 ownership through cancellation and late replies. Existing generated and legacy
-transport APIs keep their existing buffer representations.
+transport APIs keep their existing buffer representations. Additive generated
+methods use metadata projections for a statically bounded prefix and terminal
+opaque body, and segmented encoders retain request owners. The
+[generated API contract](cli-spec.md#generated-caller-owned-client-api) specifies
+the supported layouts and ownership boundaries.
 
 
 Transport and serialization code should prefer zero-copy or minimal-copy data

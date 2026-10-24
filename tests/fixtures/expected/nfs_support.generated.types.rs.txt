@@ -14,3 +14,8 @@ pub mod nfs_support_program {
 
 }
 
+/// Metadata-only projection; the terminal opaque body remains in caller storage.
+pub type remote_handle_tMetadata = onc_rpc_xdr::OpaqueLength<{ REMOTE_HANDLE_SIZE as usize }>;
+
+/// Alternate argument representation retaining multiple owners for one terminal opaque body.
+pub type remote_handle_tSegments = onc_rpc_xdr::OpaqueSegments<{ REMOTE_HANDLE_SIZE as usize }>;

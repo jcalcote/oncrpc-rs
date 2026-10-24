@@ -3,8 +3,15 @@ use std::any::TypeId;
 use std::str;
 use thiserror::Error;
 
+mod segments;
+pub use segments::{
+    OpaqueLength, OpaqueSegments, SegmentEncoder, XdrEncodeSegments, XdrReplyMetadata,
+};
+
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum XdrError {
+    #[error("XDR length {length} exceeds limit {maximum}")]
+    LengthLimit { length: usize, maximum: usize },
     #[error("unexpected end of input while reading {needed} bytes")]
     UnexpectedEof { needed: usize },
     #[error("invalid boolean discriminator: {0}")]

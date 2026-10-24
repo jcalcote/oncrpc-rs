@@ -4,11 +4,13 @@ mod admission;
 mod owned;
 mod record_io;
 mod transport;
+mod xdr_client;
 pub use admission::{AdmissionError, AdmissionLimits, AdmissionSnapshot};
 pub use owned::{
     CallRefusal, OwnedRpcTransport, ReceiveOutcome, RecordLimits, ReplyReceiver, SegmentedReply,
     SegmentedRequest, read_rpc_message, read_rpc_message_with_limits,
 };
+pub use xdr_client::{TypedReceiveOutcome, XdrDecodeReceiver, XdrReplyReceiver};
 
 pub use async_trait::async_trait;
 use bytes::{Buf, Bytes, BytesMut};

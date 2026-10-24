@@ -1,0 +1,278 @@
+pub mod nfs_program {
+    pub const PROGRAM: u32 = 100003;
+
+    pub mod nfs_v3 {
+        pub const VERSION: u32 = 3;
+        pub const NFSPROC3_READ: u32 = 6;
+        pub const NFSPROC3_WRITE: u32 = 7;
+        pub const NFSPROC3_COMMIT: u32 = 21;
+
+        pub mod client {
+            pub struct NFS_V3Client<T> {
+                client: onc_rpc_runtime::Client<T>,
+            }
+
+            impl<T> NFS_V3Client<T> where T: onc_rpc_runtime::ClientTransport {
+                pub fn new(client: onc_rpc_runtime::Client<T>) -> Self {
+                    Self { client }
+                }
+
+                pub fn nfsproc3_read(&self, argument: crate::nfs3_io::READ3args) -> Result<crate::nfs3_io::READ3res, onc_rpc_runtime::RuntimeError> {
+                    self.client.call_typed(
+                        onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION },
+                        onc_rpc_runtime::Procedure(super::NFSPROC3_READ),
+                        &argument,
+                    )
+                }
+
+                pub fn nfsproc3_read_with_options(&self, argument: crate::nfs3_io::READ3args, options: &onc_rpc_runtime::CallOptions) -> Result<crate::nfs3_io::READ3res, onc_rpc_runtime::RuntimeError> {
+                    self.client.call_typed_with_options(
+                        onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION },
+                        onc_rpc_runtime::Procedure(super::NFSPROC3_READ),
+                        &argument,
+                        options,
+                    )
+                }
+
+                pub fn nfsproc3_write(&self, argument: crate::nfs3_io::WRITE3args) -> Result<crate::nfs3_io::WRITE3res, onc_rpc_runtime::RuntimeError> {
+                    self.client.call_typed(
+                        onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION },
+                        onc_rpc_runtime::Procedure(super::NFSPROC3_WRITE),
+                        &argument,
+                    )
+                }
+
+                pub fn nfsproc3_write_with_options(&self, argument: crate::nfs3_io::WRITE3args, options: &onc_rpc_runtime::CallOptions) -> Result<crate::nfs3_io::WRITE3res, onc_rpc_runtime::RuntimeError> {
+                    self.client.call_typed_with_options(
+                        onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION },
+                        onc_rpc_runtime::Procedure(super::NFSPROC3_WRITE),
+                        &argument,
+                        options,
+                    )
+                }
+
+                pub fn nfsproc3_commit(&self, argument: crate::nfs3_io::COMMIT3args) -> Result<crate::nfs3_io::COMMIT3res, onc_rpc_runtime::RuntimeError> {
+                    self.client.call_typed(
+                        onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION },
+                        onc_rpc_runtime::Procedure(super::NFSPROC3_COMMIT),
+                        &argument,
+                    )
+                }
+
+                pub fn nfsproc3_commit_with_options(&self, argument: crate::nfs3_io::COMMIT3args, options: &onc_rpc_runtime::CallOptions) -> Result<crate::nfs3_io::COMMIT3res, onc_rpc_runtime::RuntimeError> {
+                    self.client.call_typed_with_options(
+                        onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION },
+                        onc_rpc_runtime::Procedure(super::NFSPROC3_COMMIT),
+                        &argument,
+                        options,
+                    )
+                }
+
+            }
+
+        }
+
+        pub mod async_client {
+            pub struct NFS_V3Client<T> {
+                client: onc_rpc_runtime::AsyncClient<T>,
+            }
+
+            impl<T> NFS_V3Client<T> where T: onc_rpc_runtime::AsyncClientTransport {
+                pub fn new(client: onc_rpc_runtime::AsyncClient<T>) -> Self {
+                    Self { client }
+                }
+
+                pub async fn nfsproc3_read(&self, argument: crate::nfs3_io::READ3args) -> Result<crate::nfs3_io::READ3res, onc_rpc_runtime::RuntimeError> {
+                    self.client.call_typed(
+                        onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION },
+                        onc_rpc_runtime::Procedure(super::NFSPROC3_READ),
+                        &argument,
+                    ).await
+                }
+
+                pub async fn nfsproc3_read_with_options(&self, argument: crate::nfs3_io::READ3args, options: &onc_rpc_runtime::CallOptions) -> Result<crate::nfs3_io::READ3res, onc_rpc_runtime::RuntimeError> {
+                    self.client.call_typed_with_options(
+                        onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION },
+                        onc_rpc_runtime::Procedure(super::NFSPROC3_READ),
+                        &argument,
+                        options,
+                    ).await
+                }
+
+                pub async fn nfsproc3_write(&self, argument: crate::nfs3_io::WRITE3args) -> Result<crate::nfs3_io::WRITE3res, onc_rpc_runtime::RuntimeError> {
+                    self.client.call_typed(
+                        onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION },
+                        onc_rpc_runtime::Procedure(super::NFSPROC3_WRITE),
+                        &argument,
+                    ).await
+                }
+
+                pub async fn nfsproc3_write_with_options(&self, argument: crate::nfs3_io::WRITE3args, options: &onc_rpc_runtime::CallOptions) -> Result<crate::nfs3_io::WRITE3res, onc_rpc_runtime::RuntimeError> {
+                    self.client.call_typed_with_options(
+                        onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION },
+                        onc_rpc_runtime::Procedure(super::NFSPROC3_WRITE),
+                        &argument,
+                        options,
+                    ).await
+                }
+
+                pub async fn nfsproc3_commit(&self, argument: crate::nfs3_io::COMMIT3args) -> Result<crate::nfs3_io::COMMIT3res, onc_rpc_runtime::RuntimeError> {
+                    self.client.call_typed(
+                        onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION },
+                        onc_rpc_runtime::Procedure(super::NFSPROC3_COMMIT),
+                        &argument,
+                    ).await
+                }
+
+                pub async fn nfsproc3_commit_with_options(&self, argument: crate::nfs3_io::COMMIT3args, options: &onc_rpc_runtime::CallOptions) -> Result<crate::nfs3_io::COMMIT3res, onc_rpc_runtime::RuntimeError> {
+                    self.client.call_typed_with_options(
+                        onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION },
+                        onc_rpc_runtime::Procedure(super::NFSPROC3_COMMIT),
+                        &argument,
+                        options,
+                    ).await
+                }
+
+            }
+
+            impl NFS_V3Client<onc_rpc_runtime::OwnedRpcTransport> {
+                /// Send generated XDR segments and decode the result in caller-bounded storage.
+                pub async fn nfsproc3_read_segmented<B: AsMut<[u8]> + Send + 'static>(&self, argument: crate::nfs3_io::READ3args, buffer: B, options: &onc_rpc_runtime::CallOptions) -> onc_rpc_runtime::TypedReceiveOutcome<crate::nfs3_io::READ3res, B> {
+                    self.client.call_xdr_segmented::<_, crate::nfs3_io::READ3res, B>(onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION }, onc_rpc_runtime::Procedure(super::NFSPROC3_READ), &argument, buffer, options).await
+                }
+                /// Admit a segmented call immediately, returning both owners on refusal.
+                #[allow(clippy::result_large_err)] // Refusal returns original owners without boxing.
+                pub fn try_nfsproc3_read_segmented<B: AsMut<[u8]> + Send + 'static>(&self, argument: crate::nfs3_io::READ3args, buffer: B, options: &onc_rpc_runtime::CallOptions) -> Result<impl std::future::Future<Output = onc_rpc_runtime::TypedReceiveOutcome<crate::nfs3_io::READ3res, B>> + Send + 'static + use<B>, onc_rpc_runtime::CallRefusal<crate::nfs3_io::READ3args, B>> {
+                    self.client.try_call_xdr_segmented::<_, crate::nfs3_io::READ3res, B>(onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION }, onc_rpc_runtime::Procedure(super::NFSPROC3_READ), argument, buffer, options)
+                }
+                /// Decode generated metadata and place the terminal opaque body directly in `buffer`.
+                pub async fn nfsproc3_read_into<B: AsMut<[u8]> + Send + 'static>(&self, argument: crate::nfs3_io::READ3args, buffer: B, options: &onc_rpc_runtime::CallOptions) -> onc_rpc_runtime::TypedReceiveOutcome<crate::nfs3_io::READ3resMetadata, B> {
+                    self.client.call_xdr_into::<_, crate::nfs3_io::READ3resMetadata, B>(onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION }, onc_rpc_runtime::Procedure(super::NFSPROC3_READ), &argument, buffer, options).await
+                }
+                /// Admit immediately; refusal returns the unsent request and original receive owner.
+                #[allow(clippy::result_large_err)] // Refusal returns original owners without boxing.
+                pub fn try_nfsproc3_read_into<B: AsMut<[u8]> + Send + 'static>(&self, argument: crate::nfs3_io::READ3args, buffer: B, options: &onc_rpc_runtime::CallOptions) -> Result<impl std::future::Future<Output = onc_rpc_runtime::TypedReceiveOutcome<crate::nfs3_io::READ3resMetadata, B>> + Send + 'static + use<B>, onc_rpc_runtime::CallRefusal<crate::nfs3_io::READ3args, B>> {
+                    self.client.try_call_xdr_into::<_, crate::nfs3_io::READ3resMetadata, B>(onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION }, onc_rpc_runtime::Procedure(super::NFSPROC3_READ), argument, buffer, options)
+                }
+
+                /// Send generated XDR segments and decode the result in caller-bounded storage.
+                pub async fn nfsproc3_write_segmented<B: AsMut<[u8]> + Send + 'static, A: Into<crate::nfs3_io::WRITE3argsSegments>>(&self, argument: A, buffer: B, options: &onc_rpc_runtime::CallOptions) -> onc_rpc_runtime::TypedReceiveOutcome<crate::nfs3_io::WRITE3res, B> {
+                    let argument: crate::nfs3_io::WRITE3argsSegments = argument.into();
+                    self.client.call_xdr_segmented::<_, crate::nfs3_io::WRITE3res, B>(onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION }, onc_rpc_runtime::Procedure(super::NFSPROC3_WRITE), &argument, buffer, options).await
+                }
+                /// Admit a segmented call immediately, returning both owners on refusal.
+                #[allow(clippy::result_large_err)] // Refusal returns original owners without boxing.
+                pub fn try_nfsproc3_write_segmented<B: AsMut<[u8]> + Send + 'static, A: Into<crate::nfs3_io::WRITE3argsSegments>>(&self, argument: A, buffer: B, options: &onc_rpc_runtime::CallOptions) -> Result<impl std::future::Future<Output = onc_rpc_runtime::TypedReceiveOutcome<crate::nfs3_io::WRITE3res, B>> + Send + 'static + use<A, B>, onc_rpc_runtime::CallRefusal<crate::nfs3_io::WRITE3argsSegments, B>> {
+                    let argument: crate::nfs3_io::WRITE3argsSegments = argument.into();
+                    self.client.try_call_xdr_segmented::<_, crate::nfs3_io::WRITE3res, B>(onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION }, onc_rpc_runtime::Procedure(super::NFSPROC3_WRITE), argument, buffer, options)
+                }
+
+                /// Send generated XDR segments and decode the result in caller-bounded storage.
+                pub async fn nfsproc3_commit_segmented<B: AsMut<[u8]> + Send + 'static>(&self, argument: crate::nfs3_io::COMMIT3args, buffer: B, options: &onc_rpc_runtime::CallOptions) -> onc_rpc_runtime::TypedReceiveOutcome<crate::nfs3_io::COMMIT3res, B> {
+                    self.client.call_xdr_segmented::<_, crate::nfs3_io::COMMIT3res, B>(onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION }, onc_rpc_runtime::Procedure(super::NFSPROC3_COMMIT), &argument, buffer, options).await
+                }
+                /// Admit a segmented call immediately, returning both owners on refusal.
+                #[allow(clippy::result_large_err)] // Refusal returns original owners without boxing.
+                pub fn try_nfsproc3_commit_segmented<B: AsMut<[u8]> + Send + 'static>(&self, argument: crate::nfs3_io::COMMIT3args, buffer: B, options: &onc_rpc_runtime::CallOptions) -> Result<impl std::future::Future<Output = onc_rpc_runtime::TypedReceiveOutcome<crate::nfs3_io::COMMIT3res, B>> + Send + 'static + use<B>, onc_rpc_runtime::CallRefusal<crate::nfs3_io::COMMIT3args, B>> {
+                    self.client.try_call_xdr_segmented::<_, crate::nfs3_io::COMMIT3res, B>(onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION }, onc_rpc_runtime::Procedure(super::NFSPROC3_COMMIT), argument, buffer, options)
+                }
+
+            }
+
+        }
+
+        pub mod server {
+            pub trait NFS_V3Service {
+                fn nfsproc3_read(&self, request: &onc_rpc_server::RequestContext, argument: crate::nfs3_io::READ3args) -> Result<crate::nfs3_io::READ3res, onc_rpc_server::DispatchError>;
+                fn nfsproc3_write(&self, request: &onc_rpc_server::RequestContext, argument: crate::nfs3_io::WRITE3args) -> Result<crate::nfs3_io::WRITE3res, onc_rpc_server::DispatchError>;
+                fn nfsproc3_commit(&self, request: &onc_rpc_server::RequestContext, argument: crate::nfs3_io::COMMIT3args) -> Result<crate::nfs3_io::COMMIT3res, onc_rpc_server::DispatchError>;
+            }
+
+            pub struct NFS_V3Dispatch<T> {
+                inner: T,
+            }
+
+            impl<T> NFS_V3Dispatch<T> {
+                pub fn new(inner: T) -> Self {
+                    Self { inner }
+                }
+            }
+
+            impl<T> onc_rpc_server::Dispatch for NFS_V3Dispatch<T> where T: NFS_V3Service + Send + Sync + 'static {
+                fn dispatch(&self, request: onc_rpc_server::RequestContext) -> Result<onc_rpc_server::ResponsePayload, onc_rpc_server::DispatchError> {
+                    match request.procedure.0 {
+                        6 => {
+                            let argument = <crate::nfs3_io::READ3args as onc_rpc_xdr::XdrDecode>::from_xdr_bytes(&request.payload).map_err(|_| onc_rpc_server::DispatchError::GarbageArgs)?;
+                            let response = self.inner.nfsproc3_read(&request, argument)?;
+                            let payload = onc_rpc_xdr::XdrEncode::to_xdr_bytes(&response).map_err(|_| onc_rpc_server::DispatchError::SystemError)?;
+                            Ok(onc_rpc_server::ResponsePayload::success(payload))
+                        }
+                        7 => {
+                            let argument = <crate::nfs3_io::WRITE3args as onc_rpc_xdr::XdrDecode>::from_xdr_bytes(&request.payload).map_err(|_| onc_rpc_server::DispatchError::GarbageArgs)?;
+                            let response = self.inner.nfsproc3_write(&request, argument)?;
+                            let payload = onc_rpc_xdr::XdrEncode::to_xdr_bytes(&response).map_err(|_| onc_rpc_server::DispatchError::SystemError)?;
+                            Ok(onc_rpc_server::ResponsePayload::success(payload))
+                        }
+                        21 => {
+                            let argument = <crate::nfs3_io::COMMIT3args as onc_rpc_xdr::XdrDecode>::from_xdr_bytes(&request.payload).map_err(|_| onc_rpc_server::DispatchError::GarbageArgs)?;
+                            let response = self.inner.nfsproc3_commit(&request, argument)?;
+                            let payload = onc_rpc_xdr::XdrEncode::to_xdr_bytes(&response).map_err(|_| onc_rpc_server::DispatchError::SystemError)?;
+                            Ok(onc_rpc_server::ResponsePayload::success(payload))
+                        }
+                        _ => Err(onc_rpc_server::DispatchError::ProcedureUnavailable),
+                    }
+                }
+            }
+
+        }
+
+        pub mod async_server {
+            #[onc_rpc_server::async_trait]
+            pub trait NFS_V3Service {
+                async fn nfsproc3_read(&self, request: &onc_rpc_server::RequestContext, argument: crate::nfs3_io::READ3args) -> Result<crate::nfs3_io::READ3res, onc_rpc_server::DispatchError>;
+                async fn nfsproc3_write(&self, request: &onc_rpc_server::RequestContext, argument: crate::nfs3_io::WRITE3args) -> Result<crate::nfs3_io::WRITE3res, onc_rpc_server::DispatchError>;
+                async fn nfsproc3_commit(&self, request: &onc_rpc_server::RequestContext, argument: crate::nfs3_io::COMMIT3args) -> Result<crate::nfs3_io::COMMIT3res, onc_rpc_server::DispatchError>;
+            }
+
+            pub struct NFS_V3Dispatch<T> {
+                inner: T,
+            }
+
+            impl<T> NFS_V3Dispatch<T> {
+                pub fn new(inner: T) -> Self {
+                    Self { inner }
+                }
+            }
+
+            #[onc_rpc_server::async_trait]
+            impl<T> onc_rpc_server::AsyncDispatch for NFS_V3Dispatch<T> where T: NFS_V3Service + Send + Sync + 'static {
+                async fn dispatch(&self, request: onc_rpc_server::RequestContext) -> Result<onc_rpc_server::ResponsePayload, onc_rpc_server::DispatchError> {
+                    match request.procedure.0 {
+                        6 => {
+                            let argument = <crate::nfs3_io::READ3args as onc_rpc_xdr::XdrDecode>::from_xdr_bytes(&request.payload).map_err(|_| onc_rpc_server::DispatchError::GarbageArgs)?;
+                            let response = self.inner.nfsproc3_read(&request, argument).await?;
+                            let payload = onc_rpc_xdr::XdrEncode::to_xdr_bytes(&response).map_err(|_| onc_rpc_server::DispatchError::SystemError)?;
+                            Ok(onc_rpc_server::ResponsePayload::success(payload))
+                        }
+                        7 => {
+                            let argument = <crate::nfs3_io::WRITE3args as onc_rpc_xdr::XdrDecode>::from_xdr_bytes(&request.payload).map_err(|_| onc_rpc_server::DispatchError::GarbageArgs)?;
+                            let response = self.inner.nfsproc3_write(&request, argument).await?;
+                            let payload = onc_rpc_xdr::XdrEncode::to_xdr_bytes(&response).map_err(|_| onc_rpc_server::DispatchError::SystemError)?;
+                            Ok(onc_rpc_server::ResponsePayload::success(payload))
+                        }
+                        21 => {
+                            let argument = <crate::nfs3_io::COMMIT3args as onc_rpc_xdr::XdrDecode>::from_xdr_bytes(&request.payload).map_err(|_| onc_rpc_server::DispatchError::GarbageArgs)?;
+                            let response = self.inner.nfsproc3_commit(&request, argument).await?;
+                            let payload = onc_rpc_xdr::XdrEncode::to_xdr_bytes(&response).map_err(|_| onc_rpc_server::DispatchError::SystemError)?;
+                            Ok(onc_rpc_server::ResponsePayload::success(payload))
+                        }
+                        _ => Err(onc_rpc_server::DispatchError::ProcedureUnavailable),
+                    }
+                }
+            }
+
+        }
+
+    }
+
+}

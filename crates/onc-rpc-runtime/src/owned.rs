@@ -253,7 +253,7 @@ impl OwnedRpcTransport {
         self.state.admission.wait_for_capacity(required_bytes).await
     }
 
-    fn admission_error(&self, reason: AdmissionError) -> RuntimeError {
+    pub(crate) fn admission_error(&self, reason: AdmissionError) -> RuntimeError {
         match reason {
             AdmissionError::InvalidRequest(error) => error,
             AdmissionError::Closed => self

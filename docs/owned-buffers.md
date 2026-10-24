@@ -114,8 +114,10 @@ retires it to recover its destination. Detaching a timed-out receiver and draini
 a late reply without closing the connection is separate future work. A failure
 after sending does not prove that the remote procedure did not execute.
 
-See the runnable [example](../examples/owned-buffers/src/main.rs), which refuses a
-second call, preserves both owners and retries them after the first call finishes.
+See the runnable [client](../examples/owned-buffers/src/bin/buffer-client.rs) and
+[server](../examples/owned-buffers/src/bin/buffer-server.rs), which use generated
+interfaces, refuse a second call, preserve both owners and retry after capacity
+becomes available. [Run commands](../README.md#caller-owned-buffers) use two terminals.
 
 ## Limits and failure
 
@@ -166,7 +168,7 @@ a 4-byte record marker, at most 64 stack slice descriptors on send, fixed 4 KiB
 drain scratch on receive, per-connection task state and per-call registration,
 oneshot and segment descriptors. Envelope wire lengths exclude allocator
 capacity/rounding and descriptor overhead. Descriptor storage scales with the
-number of segments, not payload bytes. Consumers must include those controls,
+number of segments, not payload bytes. Consumers must include those controls and live operation futures,
 task/stack allowances and their underlying stream's requirements in admission
 plans; the library does not enforce an application memory quota or admission policy.
 
@@ -202,9 +204,18 @@ receiver tests additionally exercise error and timeout return of the original
 owner, reader callback failures/panics, explicit cancellation, admission under a
 non-reading peer, completed-but-unpolled results, and a variable
 application-prefix/data/padding receiver that appends short reads into one
-allocation. Existing
-runtime, generator, server and TLS tests remain compatibility checks.
+allocation. Existing runtime, generator, server and TLS tests remain
+compatibility checks.
 
-NFS adapters and real NFS interoperability are separate integration work.
-Generated typed XDR decoders still use their existing owned representations;
-they do not automatically become zero-copy by using this release.
+The generator emits additive `*_into` and `*_segmented` methods and immediate
+`try_*` variants. Metadata projections decode a statically bounded prefix and
+leave a single terminal variable opaque body in caller storage. `FooSegments`
+argument projections use `OpaqueSegments` to represent multiple retained owners
+under one opaque length and padding. The ordinary typed methods keep their
+existing representations and copying behavior. See the
+[generated API contract](cli-spec.md#generated-caller-owned-client-api).
+
+The public RFC 1813 NFSv3 READ/WRITE/COMMIT fixture exercises generated APIs with
+optional attributes, typed error unions, fragmented records, short replies,
+64-bit offsets and multi-owner WRITE data. This controlled-peer coverage does
+not qualify interoperability with a deployed NFS server.

@@ -65,6 +65,19 @@ pub mod time_service {
 
             }
 
+            impl TIME_SERVICE_V1Client<onc_rpc_runtime::OwnedRpcTransport> {
+                /// Send generated XDR segments and decode the result in caller-bounded storage.
+                pub async fn get_time_segmented<B: AsMut<[u8]> + Send + 'static>(&self, buffer: B, options: &onc_rpc_runtime::CallOptions) -> onc_rpc_runtime::TypedReceiveOutcome<crate::time_service::time_string, B> {
+                    self.client.call_xdr_segmented::<_, crate::time_service::time_string, B>(onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION }, onc_rpc_runtime::Procedure(super::GET_TIME), &(), buffer, options).await
+                }
+                /// Admit a segmented call immediately, returning both owners on refusal.
+                #[allow(clippy::result_large_err)] // Refusal returns original owners without boxing.
+                pub fn try_get_time_segmented<B: AsMut<[u8]> + Send + 'static>(&self, buffer: B, options: &onc_rpc_runtime::CallOptions) -> Result<impl std::future::Future<Output = onc_rpc_runtime::TypedReceiveOutcome<crate::time_service::time_string, B>> + Send + 'static + use<B>, onc_rpc_runtime::CallRefusal<(), B>> {
+                    self.client.try_call_xdr_segmented::<_, crate::time_service::time_string, B>(onc_rpc_runtime::ProgramVersion { program: super::super::PROGRAM, version: super::VERSION }, onc_rpc_runtime::Procedure(super::GET_TIME), (), buffer, options)
+                }
+
+            }
+
         }
 
         pub mod server {
@@ -134,4 +147,3 @@ pub mod time_service {
     }
 
 }
-

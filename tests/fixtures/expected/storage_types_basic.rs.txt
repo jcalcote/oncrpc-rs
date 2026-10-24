@@ -32,6 +32,14 @@ impl XdrDecode for timestamp_t {
     }
 }
 
+impl onc_rpc_xdr::XdrEncodeSegments for timestamp_t {
+    fn encode_xdr_segments(&self, output: &mut onc_rpc_xdr::SegmentEncoder) -> Result<(), onc_rpc_xdr::XdrError> {
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.seconds, output)?;
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.nseconds, output)?;
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(i32)]
 pub enum status_t {
@@ -59,3 +67,14 @@ impl XdrDecode for status_t {
     }
 }
 
+impl onc_rpc_xdr::XdrEncodeSegments for status_t {
+    fn encode_xdr_segments(&self, output: &mut onc_rpc_xdr::SegmentEncoder) -> Result<(), onc_rpc_xdr::XdrError> {
+        output.encode(self)
+    }
+}
+
+/// Metadata-only projection; the terminal opaque body remains in caller storage.
+pub type file_handle_tMetadata = onc_rpc_xdr::OpaqueLength<{ HANDLE_SIZE as usize }>;
+
+/// Alternate argument representation retaining multiple owners for one terminal opaque body.
+pub type file_handle_tSegments = onc_rpc_xdr::OpaqueSegments<{ HANDLE_SIZE as usize }>;

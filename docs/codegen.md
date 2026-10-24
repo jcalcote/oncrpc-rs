@@ -10,6 +10,8 @@
 - client stubs, including `_with_options(...)` variants for request-level call
   policy such as timeout and auth overrides
 - server traits and dispatch glue
+- additive caller-owned client methods, metadata projections and segmented
+  encoders, as specified in [the generated API contract](cli-spec.md#generated-caller-owned-client-api)
 
 This document narrows the operational contract for generator work so future
 changes stay aligned.

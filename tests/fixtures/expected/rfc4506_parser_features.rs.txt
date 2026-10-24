@@ -31,6 +31,14 @@ impl XdrDecode for full_record_t {
     }
 }
 
+impl onc_rpc_xdr::XdrEncodeSegments for full_record_t {
+    fn encode_xdr_segments(&self, output: &mut onc_rpc_xdr::SegmentEncoder) -> Result<(), onc_rpc_xdr::XdrError> {
+        output.encode(&self.fixed)?;
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.next, output)?;
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum payload_t {
     Case1 {
@@ -85,6 +93,32 @@ impl XdrDecode for payload_t {
     }
 }
 
+impl onc_rpc_xdr::XdrEncodeSegments for payload_t {
+    fn encode_xdr_segments(&self, output: &mut onc_rpc_xdr::SegmentEncoder) -> Result<(), onc_rpc_xdr::XdrError> {
+        match self {
+            Self::Case1 { single } => {
+                output.encode(&(1))?;
+                onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&single, output)?;
+                Ok(())
+            }
+            Self::Case2 { text } => {
+                output.encode(&(2))?;
+                onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&text, output)?;
+                Ok(())
+            }
+            Self::Case3 { text } => {
+                output.encode(&(3))?;
+                onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&text, output)?;
+                Ok(())
+            }
+            Self::Default { discriminant } => {
+                output.encode(discriminant)?;
+                Ok(())
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(i32)]
 pub enum mode_t {
@@ -105,6 +139,12 @@ impl XdrDecode for mode_t {
             2 => Ok(Self::MODE_B),
             other => Err(onc_rpc_xdr::XdrError::InvalidEnum(other)),
         }
+    }
+}
+
+impl onc_rpc_xdr::XdrEncodeSegments for mode_t {
+    fn encode_xdr_segments(&self, output: &mut onc_rpc_xdr::SegmentEncoder) -> Result<(), onc_rpc_xdr::XdrError> {
+        output.encode(self)
     }
 }
 
@@ -144,6 +184,22 @@ impl XdrDecode for enum_payload_t {
     }
 }
 
+impl onc_rpc_xdr::XdrEncodeSegments for enum_payload_t {
+    fn encode_xdr_segments(&self, output: &mut onc_rpc_xdr::SegmentEncoder) -> Result<(), onc_rpc_xdr::XdrError> {
+        match self {
+            Self::ModeA { value } => {
+                output.encode(&(mode_t::MODE_A))?;
+                onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&value, output)?;
+                Ok(())
+            }
+            Self::Default { discriminant } => {
+                output.encode(discriminant)?;
+                Ok(())
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(i32)]
 pub enum inline_enum_t {
@@ -167,3 +223,8 @@ impl XdrDecode for inline_enum_t {
     }
 }
 
+impl onc_rpc_xdr::XdrEncodeSegments for inline_enum_t {
+    fn encode_xdr_segments(&self, output: &mut onc_rpc_xdr::SegmentEncoder) -> Result<(), onc_rpc_xdr::XdrError> {
+        output.encode(self)
+    }
+}

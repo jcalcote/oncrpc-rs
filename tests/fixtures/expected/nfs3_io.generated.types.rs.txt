@@ -1,0 +1,1260 @@
+use bytes::Bytes;
+use onc_rpc_xdr::{XdrDecode, XdrEncode};
+
+pub const NFS3_FHSIZE: i64 = 64;
+
+pub const NFS3_WRITEVERFSIZE: i64 = 8;
+
+pub type uint32 = u32;
+
+pub type uint64 = u64;
+
+pub type fileid3 = uint64;
+
+pub type uid3 = uint32;
+
+pub type gid3 = uint32;
+
+pub type size3 = uint64;
+
+pub type offset3 = uint64;
+
+pub type mode3 = uint32;
+
+pub type count3 = uint32;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct nfs_fh3 {
+    pub data: Bytes,
+}
+
+impl XdrEncode for nfs_fh3 {
+    fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {
+        self.data.encode_xdr(output)?;
+        Ok(())
+    }
+}
+
+impl XdrDecode for nfs_fh3 {
+    fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+        Ok(Self {
+            data: bytes::Bytes::decode_xdr(input)?,
+        })
+    }
+}
+
+impl onc_rpc_xdr::XdrEncodeSegments for nfs_fh3 {
+    fn encode_xdr_segments(&self, output: &mut onc_rpc_xdr::SegmentEncoder) -> Result<(), onc_rpc_xdr::XdrError> {
+        output.opaque(&self.data, Some(NFS3_FHSIZE as usize))?;
+        Ok(())
+    }
+}
+
+pub type writeverf3 = [u8; NFS3_WRITEVERFSIZE as usize];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(i32)]
+pub enum nfsstat3 {
+    NFS3_OK = 0,
+    NFS3ERR_PERM = 1,
+    NFS3ERR_NOENT = 2,
+    NFS3ERR_IO = 5,
+    NFS3ERR_NXIO = 6,
+    NFS3ERR_ACCES = 13,
+    NFS3ERR_EXIST = 17,
+    NFS3ERR_XDEV = 18,
+    NFS3ERR_NODEV = 19,
+    NFS3ERR_NOTDIR = 20,
+    NFS3ERR_ISDIR = 21,
+    NFS3ERR_INVAL = 22,
+    NFS3ERR_FBIG = 27,
+    NFS3ERR_NOSPC = 28,
+    NFS3ERR_ROFS = 30,
+    NFS3ERR_MLINK = 31,
+    NFS3ERR_NAMETOOLONG = 63,
+    NFS3ERR_NOTEMPTY = 66,
+    NFS3ERR_DQUOT = 69,
+    NFS3ERR_STALE = 70,
+    NFS3ERR_REMOTE = 71,
+    NFS3ERR_BADHANDLE = 10001,
+    NFS3ERR_NOT_SYNC = 10002,
+    NFS3ERR_BAD_COOKIE = 10003,
+    NFS3ERR_NOTSUPP = 10004,
+    NFS3ERR_TOOSMALL = 10005,
+    NFS3ERR_SERVERFAULT = 10006,
+    NFS3ERR_BADTYPE = 10007,
+    NFS3ERR_JUKEBOX = 10008,
+}
+
+impl XdrEncode for nfsstat3 {
+    fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {
+        (*self as i32).encode_xdr(output)
+    }
+}
+
+impl XdrDecode for nfsstat3 {
+    fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+        match i32::decode_xdr(input)? {
+            0 => Ok(Self::NFS3_OK),
+            1 => Ok(Self::NFS3ERR_PERM),
+            2 => Ok(Self::NFS3ERR_NOENT),
+            5 => Ok(Self::NFS3ERR_IO),
+            6 => Ok(Self::NFS3ERR_NXIO),
+            13 => Ok(Self::NFS3ERR_ACCES),
+            17 => Ok(Self::NFS3ERR_EXIST),
+            18 => Ok(Self::NFS3ERR_XDEV),
+            19 => Ok(Self::NFS3ERR_NODEV),
+            20 => Ok(Self::NFS3ERR_NOTDIR),
+            21 => Ok(Self::NFS3ERR_ISDIR),
+            22 => Ok(Self::NFS3ERR_INVAL),
+            27 => Ok(Self::NFS3ERR_FBIG),
+            28 => Ok(Self::NFS3ERR_NOSPC),
+            30 => Ok(Self::NFS3ERR_ROFS),
+            31 => Ok(Self::NFS3ERR_MLINK),
+            63 => Ok(Self::NFS3ERR_NAMETOOLONG),
+            66 => Ok(Self::NFS3ERR_NOTEMPTY),
+            69 => Ok(Self::NFS3ERR_DQUOT),
+            70 => Ok(Self::NFS3ERR_STALE),
+            71 => Ok(Self::NFS3ERR_REMOTE),
+            10001 => Ok(Self::NFS3ERR_BADHANDLE),
+            10002 => Ok(Self::NFS3ERR_NOT_SYNC),
+            10003 => Ok(Self::NFS3ERR_BAD_COOKIE),
+            10004 => Ok(Self::NFS3ERR_NOTSUPP),
+            10005 => Ok(Self::NFS3ERR_TOOSMALL),
+            10006 => Ok(Self::NFS3ERR_SERVERFAULT),
+            10007 => Ok(Self::NFS3ERR_BADTYPE),
+            10008 => Ok(Self::NFS3ERR_JUKEBOX),
+            other => Err(onc_rpc_xdr::XdrError::InvalidEnum(other)),
+        }
+    }
+}
+
+impl onc_rpc_xdr::XdrEncodeSegments for nfsstat3 {
+    fn encode_xdr_segments(&self, output: &mut onc_rpc_xdr::SegmentEncoder) -> Result<(), onc_rpc_xdr::XdrError> {
+        output.encode(self)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(i32)]
+pub enum ftype3 {
+    NF3REG = 1,
+    NF3DIR = 2,
+    NF3BLK = 3,
+    NF3CHR = 4,
+    NF3LNK = 5,
+    NF3SOCK = 6,
+    NF3FIFO = 7,
+}
+
+impl XdrEncode for ftype3 {
+    fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {
+        (*self as i32).encode_xdr(output)
+    }
+}
+
+impl XdrDecode for ftype3 {
+    fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+        match i32::decode_xdr(input)? {
+            1 => Ok(Self::NF3REG),
+            2 => Ok(Self::NF3DIR),
+            3 => Ok(Self::NF3BLK),
+            4 => Ok(Self::NF3CHR),
+            5 => Ok(Self::NF3LNK),
+            6 => Ok(Self::NF3SOCK),
+            7 => Ok(Self::NF3FIFO),
+            other => Err(onc_rpc_xdr::XdrError::InvalidEnum(other)),
+        }
+    }
+}
+
+impl onc_rpc_xdr::XdrEncodeSegments for ftype3 {
+    fn encode_xdr_segments(&self, output: &mut onc_rpc_xdr::SegmentEncoder) -> Result<(), onc_rpc_xdr::XdrError> {
+        output.encode(self)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct specdata3 {
+    pub specdata1: uint32,
+    pub specdata2: uint32,
+}
+
+impl XdrEncode for specdata3 {
+    fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {
+        self.specdata1.encode_xdr(output)?;
+        self.specdata2.encode_xdr(output)?;
+        Ok(())
+    }
+}
+
+impl XdrDecode for specdata3 {
+    fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+        Ok(Self {
+            specdata1: <uint32 as XdrDecode>::decode_xdr(input)?,
+            specdata2: <uint32 as XdrDecode>::decode_xdr(input)?,
+        })
+    }
+}
+
+impl onc_rpc_xdr::XdrEncodeSegments for specdata3 {
+    fn encode_xdr_segments(&self, output: &mut onc_rpc_xdr::SegmentEncoder) -> Result<(), onc_rpc_xdr::XdrError> {
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.specdata1, output)?;
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.specdata2, output)?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct nfstime3 {
+    pub seconds: uint32,
+    pub nseconds: uint32,
+}
+
+impl XdrEncode for nfstime3 {
+    fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {
+        self.seconds.encode_xdr(output)?;
+        self.nseconds.encode_xdr(output)?;
+        Ok(())
+    }
+}
+
+impl XdrDecode for nfstime3 {
+    fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+        Ok(Self {
+            seconds: <uint32 as XdrDecode>::decode_xdr(input)?,
+            nseconds: <uint32 as XdrDecode>::decode_xdr(input)?,
+        })
+    }
+}
+
+impl onc_rpc_xdr::XdrEncodeSegments for nfstime3 {
+    fn encode_xdr_segments(&self, output: &mut onc_rpc_xdr::SegmentEncoder) -> Result<(), onc_rpc_xdr::XdrError> {
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.seconds, output)?;
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.nseconds, output)?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct fattr3 {
+    pub r#type: ftype3,
+    pub mode: mode3,
+    pub nlink: uint32,
+    pub uid: uid3,
+    pub gid: gid3,
+    pub size: size3,
+    pub used: size3,
+    pub rdev: specdata3,
+    pub fsid: uint64,
+    pub fileid: fileid3,
+    pub atime: nfstime3,
+    pub mtime: nfstime3,
+    pub ctime: nfstime3,
+}
+
+impl XdrEncode for fattr3 {
+    fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {
+        self.r#type.encode_xdr(output)?;
+        self.mode.encode_xdr(output)?;
+        self.nlink.encode_xdr(output)?;
+        self.uid.encode_xdr(output)?;
+        self.gid.encode_xdr(output)?;
+        self.size.encode_xdr(output)?;
+        self.used.encode_xdr(output)?;
+        self.rdev.encode_xdr(output)?;
+        self.fsid.encode_xdr(output)?;
+        self.fileid.encode_xdr(output)?;
+        self.atime.encode_xdr(output)?;
+        self.mtime.encode_xdr(output)?;
+        self.ctime.encode_xdr(output)?;
+        Ok(())
+    }
+}
+
+impl XdrDecode for fattr3 {
+    fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+        Ok(Self {
+            r#type: <ftype3 as XdrDecode>::decode_xdr(input)?,
+            mode: <mode3 as XdrDecode>::decode_xdr(input)?,
+            nlink: <uint32 as XdrDecode>::decode_xdr(input)?,
+            uid: <uid3 as XdrDecode>::decode_xdr(input)?,
+            gid: <gid3 as XdrDecode>::decode_xdr(input)?,
+            size: <size3 as XdrDecode>::decode_xdr(input)?,
+            used: <size3 as XdrDecode>::decode_xdr(input)?,
+            rdev: <specdata3 as XdrDecode>::decode_xdr(input)?,
+            fsid: <uint64 as XdrDecode>::decode_xdr(input)?,
+            fileid: <fileid3 as XdrDecode>::decode_xdr(input)?,
+            atime: <nfstime3 as XdrDecode>::decode_xdr(input)?,
+            mtime: <nfstime3 as XdrDecode>::decode_xdr(input)?,
+            ctime: <nfstime3 as XdrDecode>::decode_xdr(input)?,
+        })
+    }
+}
+
+impl onc_rpc_xdr::XdrEncodeSegments for fattr3 {
+    fn encode_xdr_segments(&self, output: &mut onc_rpc_xdr::SegmentEncoder) -> Result<(), onc_rpc_xdr::XdrError> {
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.r#type, output)?;
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.mode, output)?;
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.nlink, output)?;
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.uid, output)?;
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.gid, output)?;
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.size, output)?;
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.used, output)?;
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.rdev, output)?;
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.fsid, output)?;
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.fileid, output)?;
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.atime, output)?;
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.mtime, output)?;
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.ctime, output)?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum post_op_attr {
+    True {
+        attributes: fattr3,
+    },
+    False,
+}
+
+impl XdrEncode for post_op_attr {
+    fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {
+        match self {
+            Self::True { attributes } => {
+                (true).encode_xdr(output)?;
+                attributes.encode_xdr(output)?;
+                Ok(())
+            }
+            Self::False => {
+                (false).encode_xdr(output)?;
+                Ok(())
+            }
+        }
+    }
+}
+
+impl XdrDecode for post_op_attr {
+    fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+        let discriminant = <bool as XdrDecode>::decode_xdr(input)?;
+        match discriminant {
+            true => Ok(Self::True { attributes: <fattr3 as XdrDecode>::decode_xdr(input)? }),
+            false => Ok(Self::False),
+        }
+    }
+}
+
+impl onc_rpc_xdr::XdrEncodeSegments for post_op_attr {
+    fn encode_xdr_segments(&self, output: &mut onc_rpc_xdr::SegmentEncoder) -> Result<(), onc_rpc_xdr::XdrError> {
+        match self {
+            Self::True { attributes } => {
+                output.encode(&(true))?;
+                onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&attributes, output)?;
+                Ok(())
+            }
+            Self::False => {
+                output.encode(&(false))?;
+                Ok(())
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct wcc_attr {
+    pub size: size3,
+    pub mtime: nfstime3,
+    pub ctime: nfstime3,
+}
+
+impl XdrEncode for wcc_attr {
+    fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {
+        self.size.encode_xdr(output)?;
+        self.mtime.encode_xdr(output)?;
+        self.ctime.encode_xdr(output)?;
+        Ok(())
+    }
+}
+
+impl XdrDecode for wcc_attr {
+    fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+        Ok(Self {
+            size: <size3 as XdrDecode>::decode_xdr(input)?,
+            mtime: <nfstime3 as XdrDecode>::decode_xdr(input)?,
+            ctime: <nfstime3 as XdrDecode>::decode_xdr(input)?,
+        })
+    }
+}
+
+impl onc_rpc_xdr::XdrEncodeSegments for wcc_attr {
+    fn encode_xdr_segments(&self, output: &mut onc_rpc_xdr::SegmentEncoder) -> Result<(), onc_rpc_xdr::XdrError> {
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.size, output)?;
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.mtime, output)?;
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.ctime, output)?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum pre_op_attr {
+    True {
+        attributes: wcc_attr,
+    },
+    False,
+}
+
+impl XdrEncode for pre_op_attr {
+    fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {
+        match self {
+            Self::True { attributes } => {
+                (true).encode_xdr(output)?;
+                attributes.encode_xdr(output)?;
+                Ok(())
+            }
+            Self::False => {
+                (false).encode_xdr(output)?;
+                Ok(())
+            }
+        }
+    }
+}
+
+impl XdrDecode for pre_op_attr {
+    fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+        let discriminant = <bool as XdrDecode>::decode_xdr(input)?;
+        match discriminant {
+            true => Ok(Self::True { attributes: <wcc_attr as XdrDecode>::decode_xdr(input)? }),
+            false => Ok(Self::False),
+        }
+    }
+}
+
+impl onc_rpc_xdr::XdrEncodeSegments for pre_op_attr {
+    fn encode_xdr_segments(&self, output: &mut onc_rpc_xdr::SegmentEncoder) -> Result<(), onc_rpc_xdr::XdrError> {
+        match self {
+            Self::True { attributes } => {
+                output.encode(&(true))?;
+                onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&attributes, output)?;
+                Ok(())
+            }
+            Self::False => {
+                output.encode(&(false))?;
+                Ok(())
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct wcc_data {
+    pub before: pre_op_attr,
+    pub after: post_op_attr,
+}
+
+impl XdrEncode for wcc_data {
+    fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {
+        self.before.encode_xdr(output)?;
+        self.after.encode_xdr(output)?;
+        Ok(())
+    }
+}
+
+impl XdrDecode for wcc_data {
+    fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+        Ok(Self {
+            before: <pre_op_attr as XdrDecode>::decode_xdr(input)?,
+            after: <post_op_attr as XdrDecode>::decode_xdr(input)?,
+        })
+    }
+}
+
+impl onc_rpc_xdr::XdrEncodeSegments for wcc_data {
+    fn encode_xdr_segments(&self, output: &mut onc_rpc_xdr::SegmentEncoder) -> Result<(), onc_rpc_xdr::XdrError> {
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.before, output)?;
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.after, output)?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct READ3args {
+    pub file: nfs_fh3,
+    pub offset: offset3,
+    pub count: count3,
+}
+
+impl XdrEncode for READ3args {
+    fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {
+        self.file.encode_xdr(output)?;
+        self.offset.encode_xdr(output)?;
+        self.count.encode_xdr(output)?;
+        Ok(())
+    }
+}
+
+impl XdrDecode for READ3args {
+    fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+        Ok(Self {
+            file: <nfs_fh3 as XdrDecode>::decode_xdr(input)?,
+            offset: <offset3 as XdrDecode>::decode_xdr(input)?,
+            count: <count3 as XdrDecode>::decode_xdr(input)?,
+        })
+    }
+}
+
+impl onc_rpc_xdr::XdrEncodeSegments for READ3args {
+    fn encode_xdr_segments(&self, output: &mut onc_rpc_xdr::SegmentEncoder) -> Result<(), onc_rpc_xdr::XdrError> {
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.file, output)?;
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.offset, output)?;
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.count, output)?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct READ3resok {
+    pub file_attributes: post_op_attr,
+    pub count: count3,
+    pub eof: bool,
+    pub data: Bytes,
+}
+
+impl XdrEncode for READ3resok {
+    fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {
+        self.file_attributes.encode_xdr(output)?;
+        self.count.encode_xdr(output)?;
+        self.eof.encode_xdr(output)?;
+        self.data.encode_xdr(output)?;
+        Ok(())
+    }
+}
+
+impl XdrDecode for READ3resok {
+    fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+        Ok(Self {
+            file_attributes: <post_op_attr as XdrDecode>::decode_xdr(input)?,
+            count: <count3 as XdrDecode>::decode_xdr(input)?,
+            eof: <bool as XdrDecode>::decode_xdr(input)?,
+            data: bytes::Bytes::decode_xdr(input)?,
+        })
+    }
+}
+
+impl onc_rpc_xdr::XdrEncodeSegments for READ3resok {
+    fn encode_xdr_segments(&self, output: &mut onc_rpc_xdr::SegmentEncoder) -> Result<(), onc_rpc_xdr::XdrError> {
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.file_attributes, output)?;
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.count, output)?;
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.eof, output)?;
+        output.opaque(&self.data, None)?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct READ3resfail {
+    pub file_attributes: post_op_attr,
+}
+
+impl XdrEncode for READ3resfail {
+    fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {
+        self.file_attributes.encode_xdr(output)?;
+        Ok(())
+    }
+}
+
+impl XdrDecode for READ3resfail {
+    fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+        Ok(Self {
+            file_attributes: <post_op_attr as XdrDecode>::decode_xdr(input)?,
+        })
+    }
+}
+
+impl onc_rpc_xdr::XdrEncodeSegments for READ3resfail {
+    fn encode_xdr_segments(&self, output: &mut onc_rpc_xdr::SegmentEncoder) -> Result<(), onc_rpc_xdr::XdrError> {
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.file_attributes, output)?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum READ3res {
+    Nfs3Ok {
+        resok: READ3resok,
+    },
+    Default {
+        discriminant: i32,
+        resfail: READ3resfail,
+    },
+}
+
+impl XdrEncode for READ3res {
+    fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {
+        match self {
+            Self::Nfs3Ok { resok } => {
+                (nfsstat3::NFS3_OK).encode_xdr(output)?;
+                resok.encode_xdr(output)?;
+                Ok(())
+            }
+            Self::Default { discriminant, resfail } => {
+                discriminant.encode_xdr(output)?;
+                resfail.encode_xdr(output)?;
+                Ok(())
+            }
+        }
+    }
+}
+
+impl XdrDecode for READ3res {
+    fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+        let discriminant = <i32 as XdrDecode>::decode_xdr(input)?;
+        match discriminant {
+            value if value == nfsstat3::NFS3_OK as i32 => Ok(Self::Nfs3Ok { resok: <READ3resok as XdrDecode>::decode_xdr(input)? }),
+            discriminant => Ok(Self::Default { discriminant, resfail: <READ3resfail as XdrDecode>::decode_xdr(input)? }),
+        }
+    }
+}
+
+impl onc_rpc_xdr::XdrEncodeSegments for READ3res {
+    fn encode_xdr_segments(&self, output: &mut onc_rpc_xdr::SegmentEncoder) -> Result<(), onc_rpc_xdr::XdrError> {
+        match self {
+            Self::Nfs3Ok { resok } => {
+                output.encode(&(nfsstat3::NFS3_OK))?;
+                onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&resok, output)?;
+                Ok(())
+            }
+            Self::Default { discriminant, resfail } => {
+                output.encode(discriminant)?;
+                onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&resfail, output)?;
+                Ok(())
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(i32)]
+pub enum stable_how {
+    UNSTABLE = 0,
+    DATA_SYNC = 1,
+    FILE_SYNC = 2,
+}
+
+impl XdrEncode for stable_how {
+    fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {
+        (*self as i32).encode_xdr(output)
+    }
+}
+
+impl XdrDecode for stable_how {
+    fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+        match i32::decode_xdr(input)? {
+            0 => Ok(Self::UNSTABLE),
+            1 => Ok(Self::DATA_SYNC),
+            2 => Ok(Self::FILE_SYNC),
+            other => Err(onc_rpc_xdr::XdrError::InvalidEnum(other)),
+        }
+    }
+}
+
+impl onc_rpc_xdr::XdrEncodeSegments for stable_how {
+    fn encode_xdr_segments(&self, output: &mut onc_rpc_xdr::SegmentEncoder) -> Result<(), onc_rpc_xdr::XdrError> {
+        output.encode(self)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WRITE3args {
+    pub file: nfs_fh3,
+    pub offset: offset3,
+    pub count: count3,
+    pub stable: stable_how,
+    pub data: Bytes,
+}
+
+impl XdrEncode for WRITE3args {
+    fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {
+        self.file.encode_xdr(output)?;
+        self.offset.encode_xdr(output)?;
+        self.count.encode_xdr(output)?;
+        self.stable.encode_xdr(output)?;
+        self.data.encode_xdr(output)?;
+        Ok(())
+    }
+}
+
+impl XdrDecode for WRITE3args {
+    fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+        Ok(Self {
+            file: <nfs_fh3 as XdrDecode>::decode_xdr(input)?,
+            offset: <offset3 as XdrDecode>::decode_xdr(input)?,
+            count: <count3 as XdrDecode>::decode_xdr(input)?,
+            stable: <stable_how as XdrDecode>::decode_xdr(input)?,
+            data: bytes::Bytes::decode_xdr(input)?,
+        })
+    }
+}
+
+impl onc_rpc_xdr::XdrEncodeSegments for WRITE3args {
+    fn encode_xdr_segments(&self, output: &mut onc_rpc_xdr::SegmentEncoder) -> Result<(), onc_rpc_xdr::XdrError> {
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.file, output)?;
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.offset, output)?;
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.count, output)?;
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.stable, output)?;
+        output.opaque(&self.data, None)?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WRITE3resok {
+    pub file_wcc: wcc_data,
+    pub count: count3,
+    pub committed: stable_how,
+    pub verf: writeverf3,
+}
+
+impl XdrEncode for WRITE3resok {
+    fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {
+        self.file_wcc.encode_xdr(output)?;
+        self.count.encode_xdr(output)?;
+        self.committed.encode_xdr(output)?;
+        self.verf.encode_xdr(output)?;
+        Ok(())
+    }
+}
+
+impl XdrDecode for WRITE3resok {
+    fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+        Ok(Self {
+            file_wcc: <wcc_data as XdrDecode>::decode_xdr(input)?,
+            count: <count3 as XdrDecode>::decode_xdr(input)?,
+            committed: <stable_how as XdrDecode>::decode_xdr(input)?,
+            verf: <writeverf3 as XdrDecode>::decode_xdr(input)?,
+        })
+    }
+}
+
+impl onc_rpc_xdr::XdrEncodeSegments for WRITE3resok {
+    fn encode_xdr_segments(&self, output: &mut onc_rpc_xdr::SegmentEncoder) -> Result<(), onc_rpc_xdr::XdrError> {
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.file_wcc, output)?;
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.count, output)?;
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.committed, output)?;
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.verf, output)?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WRITE3resfail {
+    pub file_wcc: wcc_data,
+}
+
+impl XdrEncode for WRITE3resfail {
+    fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {
+        self.file_wcc.encode_xdr(output)?;
+        Ok(())
+    }
+}
+
+impl XdrDecode for WRITE3resfail {
+    fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+        Ok(Self {
+            file_wcc: <wcc_data as XdrDecode>::decode_xdr(input)?,
+        })
+    }
+}
+
+impl onc_rpc_xdr::XdrEncodeSegments for WRITE3resfail {
+    fn encode_xdr_segments(&self, output: &mut onc_rpc_xdr::SegmentEncoder) -> Result<(), onc_rpc_xdr::XdrError> {
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.file_wcc, output)?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WRITE3res {
+    Nfs3Ok {
+        resok: WRITE3resok,
+    },
+    Default {
+        discriminant: i32,
+        resfail: WRITE3resfail,
+    },
+}
+
+impl XdrEncode for WRITE3res {
+    fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {
+        match self {
+            Self::Nfs3Ok { resok } => {
+                (nfsstat3::NFS3_OK).encode_xdr(output)?;
+                resok.encode_xdr(output)?;
+                Ok(())
+            }
+            Self::Default { discriminant, resfail } => {
+                discriminant.encode_xdr(output)?;
+                resfail.encode_xdr(output)?;
+                Ok(())
+            }
+        }
+    }
+}
+
+impl XdrDecode for WRITE3res {
+    fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+        let discriminant = <i32 as XdrDecode>::decode_xdr(input)?;
+        match discriminant {
+            value if value == nfsstat3::NFS3_OK as i32 => Ok(Self::Nfs3Ok { resok: <WRITE3resok as XdrDecode>::decode_xdr(input)? }),
+            discriminant => Ok(Self::Default { discriminant, resfail: <WRITE3resfail as XdrDecode>::decode_xdr(input)? }),
+        }
+    }
+}
+
+impl onc_rpc_xdr::XdrEncodeSegments for WRITE3res {
+    fn encode_xdr_segments(&self, output: &mut onc_rpc_xdr::SegmentEncoder) -> Result<(), onc_rpc_xdr::XdrError> {
+        match self {
+            Self::Nfs3Ok { resok } => {
+                output.encode(&(nfsstat3::NFS3_OK))?;
+                onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&resok, output)?;
+                Ok(())
+            }
+            Self::Default { discriminant, resfail } => {
+                output.encode(discriminant)?;
+                onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&resfail, output)?;
+                Ok(())
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct COMMIT3args {
+    pub file: nfs_fh3,
+    pub offset: offset3,
+    pub count: count3,
+}
+
+impl XdrEncode for COMMIT3args {
+    fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {
+        self.file.encode_xdr(output)?;
+        self.offset.encode_xdr(output)?;
+        self.count.encode_xdr(output)?;
+        Ok(())
+    }
+}
+
+impl XdrDecode for COMMIT3args {
+    fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+        Ok(Self {
+            file: <nfs_fh3 as XdrDecode>::decode_xdr(input)?,
+            offset: <offset3 as XdrDecode>::decode_xdr(input)?,
+            count: <count3 as XdrDecode>::decode_xdr(input)?,
+        })
+    }
+}
+
+impl onc_rpc_xdr::XdrEncodeSegments for COMMIT3args {
+    fn encode_xdr_segments(&self, output: &mut onc_rpc_xdr::SegmentEncoder) -> Result<(), onc_rpc_xdr::XdrError> {
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.file, output)?;
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.offset, output)?;
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.count, output)?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct COMMIT3resok {
+    pub file_wcc: wcc_data,
+    pub verf: writeverf3,
+}
+
+impl XdrEncode for COMMIT3resok {
+    fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {
+        self.file_wcc.encode_xdr(output)?;
+        self.verf.encode_xdr(output)?;
+        Ok(())
+    }
+}
+
+impl XdrDecode for COMMIT3resok {
+    fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+        Ok(Self {
+            file_wcc: <wcc_data as XdrDecode>::decode_xdr(input)?,
+            verf: <writeverf3 as XdrDecode>::decode_xdr(input)?,
+        })
+    }
+}
+
+impl onc_rpc_xdr::XdrEncodeSegments for COMMIT3resok {
+    fn encode_xdr_segments(&self, output: &mut onc_rpc_xdr::SegmentEncoder) -> Result<(), onc_rpc_xdr::XdrError> {
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.file_wcc, output)?;
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.verf, output)?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct COMMIT3resfail {
+    pub file_wcc: wcc_data,
+}
+
+impl XdrEncode for COMMIT3resfail {
+    fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {
+        self.file_wcc.encode_xdr(output)?;
+        Ok(())
+    }
+}
+
+impl XdrDecode for COMMIT3resfail {
+    fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+        Ok(Self {
+            file_wcc: <wcc_data as XdrDecode>::decode_xdr(input)?,
+        })
+    }
+}
+
+impl onc_rpc_xdr::XdrEncodeSegments for COMMIT3resfail {
+    fn encode_xdr_segments(&self, output: &mut onc_rpc_xdr::SegmentEncoder) -> Result<(), onc_rpc_xdr::XdrError> {
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.file_wcc, output)?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum COMMIT3res {
+    Nfs3Ok {
+        resok: COMMIT3resok,
+    },
+    Default {
+        discriminant: i32,
+        resfail: COMMIT3resfail,
+    },
+}
+
+impl XdrEncode for COMMIT3res {
+    fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {
+        match self {
+            Self::Nfs3Ok { resok } => {
+                (nfsstat3::NFS3_OK).encode_xdr(output)?;
+                resok.encode_xdr(output)?;
+                Ok(())
+            }
+            Self::Default { discriminant, resfail } => {
+                discriminant.encode_xdr(output)?;
+                resfail.encode_xdr(output)?;
+                Ok(())
+            }
+        }
+    }
+}
+
+impl XdrDecode for COMMIT3res {
+    fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+        let discriminant = <i32 as XdrDecode>::decode_xdr(input)?;
+        match discriminant {
+            value if value == nfsstat3::NFS3_OK as i32 => Ok(Self::Nfs3Ok { resok: <COMMIT3resok as XdrDecode>::decode_xdr(input)? }),
+            discriminant => Ok(Self::Default { discriminant, resfail: <COMMIT3resfail as XdrDecode>::decode_xdr(input)? }),
+        }
+    }
+}
+
+impl onc_rpc_xdr::XdrEncodeSegments for COMMIT3res {
+    fn encode_xdr_segments(&self, output: &mut onc_rpc_xdr::SegmentEncoder) -> Result<(), onc_rpc_xdr::XdrError> {
+        match self {
+            Self::Nfs3Ok { resok } => {
+                output.encode(&(nfsstat3::NFS3_OK))?;
+                onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&resok, output)?;
+                Ok(())
+            }
+            Self::Default { discriminant, resfail } => {
+                output.encode(discriminant)?;
+                onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&resfail, output)?;
+                Ok(())
+            }
+        }
+    }
+}
+
+pub mod nfs_program {
+    pub const PROGRAM: u32 = 100003;
+
+    pub mod nfs_v3 {
+        pub const VERSION: u32 = 3;
+        pub const NFSPROC3_READ: u32 = 6;
+        pub const NFSPROC3_WRITE: u32 = 7;
+        pub const NFSPROC3_COMMIT: u32 = 21;
+    }
+
+}
+
+/// Metadata-only projection; the terminal opaque body remains in caller storage.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct nfs_fh3Metadata {
+    pub data: onc_rpc_xdr::OpaqueLength<{ NFS3_FHSIZE as usize }>,
+}
+
+impl XdrDecode for nfs_fh3Metadata {
+    fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+        Ok(Self {
+            data: <onc_rpc_xdr::OpaqueLength<{ NFS3_FHSIZE as usize }> as XdrDecode>::decode_xdr(input)?,
+        })
+    }
+}
+
+impl onc_rpc_xdr::XdrReplyMetadata for nfs_fh3Metadata {
+    const MAX_PREFIX_BYTES: usize = 4;
+    fn opaque_len(&self) -> Option<usize> { onc_rpc_xdr::XdrReplyMetadata::opaque_len(&self.data) }
+}
+
+/// Metadata-only projection; the terminal opaque body remains in caller storage.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct READ3resokMetadata {
+    pub file_attributes: post_op_attr,
+    pub count: count3,
+    pub eof: bool,
+    pub data: onc_rpc_xdr::OpaqueLength<{ u32::MAX as usize }>,
+}
+
+impl XdrDecode for READ3resokMetadata {
+    fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+        Ok(Self {
+            file_attributes: <post_op_attr as XdrDecode>::decode_xdr(input)?,
+            count: <count3 as XdrDecode>::decode_xdr(input)?,
+            eof: <bool as XdrDecode>::decode_xdr(input)?,
+            data: <onc_rpc_xdr::OpaqueLength<{ u32::MAX as usize }> as XdrDecode>::decode_xdr(input)?,
+        })
+    }
+}
+
+impl onc_rpc_xdr::XdrReplyMetadata for READ3resokMetadata {
+    const MAX_PREFIX_BYTES: usize = 100;
+    fn opaque_len(&self) -> Option<usize> { onc_rpc_xdr::XdrReplyMetadata::opaque_len(&self.data) }
+}
+
+/// Metadata-only projection; the terminal opaque body remains in caller storage.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum READ3resMetadata {
+    Nfs3Ok {
+        resok: READ3resokMetadata,
+    },
+    Default {
+        discriminant: i32,
+        resfail: READ3resfail,
+    },
+}
+
+impl XdrDecode for READ3resMetadata {
+    fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+        let discriminant = <i32 as XdrDecode>::decode_xdr(input)?;
+        match discriminant {
+            value if value == nfsstat3::NFS3_OK as i32 => Ok(Self::Nfs3Ok { resok: <READ3resokMetadata as XdrDecode>::decode_xdr(input)? }),
+            discriminant => Ok(Self::Default { discriminant, resfail: <READ3resfail as XdrDecode>::decode_xdr(input)? }),
+        }
+    }
+}
+
+impl onc_rpc_xdr::XdrReplyMetadata for READ3resMetadata {
+    const MAX_PREFIX_BYTES: usize = 104;
+    fn opaque_len(&self) -> Option<usize> { match self { Self::Nfs3Ok { resok } => onc_rpc_xdr::XdrReplyMetadata::opaque_len(resok), Self::Default { .. } => None, } }
+}
+
+/// Alternate argument representation retaining multiple owners for one terminal opaque body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct nfs_fh3Segments {
+    pub data: onc_rpc_xdr::OpaqueSegments<{ NFS3_FHSIZE as usize }>,
+}
+
+impl XdrEncode for nfs_fh3Segments {
+    fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {
+        self.data.encode_xdr(output)?;
+        Ok(())
+    }
+}
+
+impl XdrDecode for nfs_fh3Segments {
+    fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+        Ok(Self {
+            data: <onc_rpc_xdr::OpaqueSegments<{ NFS3_FHSIZE as usize }> as XdrDecode>::decode_xdr(input)?,
+        })
+    }
+}
+
+impl onc_rpc_xdr::XdrEncodeSegments for nfs_fh3Segments {
+    fn encode_xdr_segments(&self, output: &mut onc_rpc_xdr::SegmentEncoder) -> Result<(), onc_rpc_xdr::XdrError> {
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.data, output)?;
+        Ok(())
+    }
+}
+
+impl From<nfs_fh3> for nfs_fh3Segments {
+    fn from(value: nfs_fh3) -> Self { Self {
+        data: value.data.into(),
+    } }
+}
+
+/// Alternate argument representation retaining multiple owners for one terminal opaque body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct READ3resokSegments {
+    pub file_attributes: post_op_attr,
+    pub count: count3,
+    pub eof: bool,
+    pub data: onc_rpc_xdr::OpaqueSegments<{ u32::MAX as usize }>,
+}
+
+impl XdrEncode for READ3resokSegments {
+    fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {
+        self.file_attributes.encode_xdr(output)?;
+        self.count.encode_xdr(output)?;
+        self.eof.encode_xdr(output)?;
+        self.data.encode_xdr(output)?;
+        Ok(())
+    }
+}
+
+impl XdrDecode for READ3resokSegments {
+    fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+        Ok(Self {
+            file_attributes: <post_op_attr as XdrDecode>::decode_xdr(input)?,
+            count: <count3 as XdrDecode>::decode_xdr(input)?,
+            eof: <bool as XdrDecode>::decode_xdr(input)?,
+            data: <onc_rpc_xdr::OpaqueSegments<{ u32::MAX as usize }> as XdrDecode>::decode_xdr(input)?,
+        })
+    }
+}
+
+impl onc_rpc_xdr::XdrEncodeSegments for READ3resokSegments {
+    fn encode_xdr_segments(&self, output: &mut onc_rpc_xdr::SegmentEncoder) -> Result<(), onc_rpc_xdr::XdrError> {
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.file_attributes, output)?;
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.count, output)?;
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.eof, output)?;
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.data, output)?;
+        Ok(())
+    }
+}
+
+impl From<READ3resok> for READ3resokSegments {
+    fn from(value: READ3resok) -> Self { Self {
+        file_attributes: value.file_attributes,
+        count: value.count,
+        eof: value.eof,
+        data: value.data.into(),
+    } }
+}
+
+/// Alternate argument representation retaining multiple owners for one terminal opaque body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum READ3resSegments {
+    Nfs3Ok {
+        resok: READ3resokSegments,
+    },
+    Default {
+        discriminant: i32,
+        resfail: READ3resfail,
+    },
+}
+
+impl XdrEncode for READ3resSegments {
+    fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {
+        match self {
+            Self::Nfs3Ok { resok } => {
+                (nfsstat3::NFS3_OK).encode_xdr(output)?;
+                resok.encode_xdr(output)?;
+                Ok(())
+            }
+            Self::Default { discriminant, resfail } => {
+                discriminant.encode_xdr(output)?;
+                resfail.encode_xdr(output)?;
+                Ok(())
+            }
+        }
+    }
+}
+
+impl XdrDecode for READ3resSegments {
+    fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+        let discriminant = <i32 as XdrDecode>::decode_xdr(input)?;
+        match discriminant {
+            value if value == nfsstat3::NFS3_OK as i32 => Ok(Self::Nfs3Ok { resok: <READ3resokSegments as XdrDecode>::decode_xdr(input)? }),
+            discriminant => Ok(Self::Default { discriminant, resfail: <READ3resfail as XdrDecode>::decode_xdr(input)? }),
+        }
+    }
+}
+
+impl onc_rpc_xdr::XdrEncodeSegments for READ3resSegments {
+    fn encode_xdr_segments(&self, output: &mut onc_rpc_xdr::SegmentEncoder) -> Result<(), onc_rpc_xdr::XdrError> {
+        match self {
+            Self::Nfs3Ok { resok } => {
+                output.encode(&(nfsstat3::NFS3_OK))?;
+                onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&resok, output)?;
+                Ok(())
+            }
+            Self::Default { discriminant, resfail } => {
+                output.encode(discriminant)?;
+                onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&resfail, output)?;
+                Ok(())
+            }
+        }
+    }
+}
+
+impl From<READ3res> for READ3resSegments {
+    fn from(value: READ3res) -> Self { match value {
+        READ3res::Nfs3Ok { resok } => Self::Nfs3Ok { resok: resok.into() },
+        READ3res::Default { discriminant, resfail } => Self::Default { discriminant, resfail },
+    } }
+}
+
+/// Alternate argument representation retaining multiple owners for one terminal opaque body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WRITE3argsSegments {
+    pub file: nfs_fh3,
+    pub offset: offset3,
+    pub count: count3,
+    pub stable: stable_how,
+    pub data: onc_rpc_xdr::OpaqueSegments<{ u32::MAX as usize }>,
+}
+
+impl XdrEncode for WRITE3argsSegments {
+    fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {
+        self.file.encode_xdr(output)?;
+        self.offset.encode_xdr(output)?;
+        self.count.encode_xdr(output)?;
+        self.stable.encode_xdr(output)?;
+        self.data.encode_xdr(output)?;
+        Ok(())
+    }
+}
+
+impl XdrDecode for WRITE3argsSegments {
+    fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+        Ok(Self {
+            file: <nfs_fh3 as XdrDecode>::decode_xdr(input)?,
+            offset: <offset3 as XdrDecode>::decode_xdr(input)?,
+            count: <count3 as XdrDecode>::decode_xdr(input)?,
+            stable: <stable_how as XdrDecode>::decode_xdr(input)?,
+            data: <onc_rpc_xdr::OpaqueSegments<{ u32::MAX as usize }> as XdrDecode>::decode_xdr(input)?,
+        })
+    }
+}
+
+impl onc_rpc_xdr::XdrEncodeSegments for WRITE3argsSegments {
+    fn encode_xdr_segments(&self, output: &mut onc_rpc_xdr::SegmentEncoder) -> Result<(), onc_rpc_xdr::XdrError> {
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.file, output)?;
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.offset, output)?;
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.count, output)?;
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.stable, output)?;
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.data, output)?;
+        Ok(())
+    }
+}
+
+impl From<WRITE3args> for WRITE3argsSegments {
+    fn from(value: WRITE3args) -> Self { Self {
+        file: value.file,
+        offset: value.offset,
+        count: value.count,
+        stable: value.stable,
+        data: value.data.into(),
+    } }
+}
