@@ -1,0 +1,331 @@
+use bytes::Bytes;
+use onc_rpc_xdr::{XdrDecode, XdrEncode};
+
+pub const BODY_MAX: i64 = 16;
+
+pub type data = Bytes;
+
+pub type alias = data;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct record {
+    pub ratio: f32,
+    pub value: alias,
+}
+
+impl XdrEncode for record {
+    fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {
+        self.ratio.encode_xdr(output)?;
+        self.value.encode_xdr(output)?;
+        Ok(())
+    }
+}
+
+impl XdrDecode for record {
+    fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+        Ok(Self {
+            ratio: <f32 as XdrDecode>::decode_xdr(input)?,
+            value: <alias as XdrDecode>::decode_xdr(input)?,
+        })
+    }
+}
+
+impl onc_rpc_xdr::XdrEncodeSegments for record {
+    fn encode_xdr_segments(&self, output: &mut onc_rpc_xdr::SegmentEncoder) -> Result<(), onc_rpc_xdr::XdrError> {
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.ratio, output)?;
+        output.opaque(&self.value, Some(BODY_MAX as usize))?;
+        Ok(())
+    }
+}
+
+pub type optional_record = Option<Box<record>>;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct wrapper {
+    pub body: optional_record,
+}
+
+impl XdrEncode for wrapper {
+    fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {
+        self.body.encode_xdr(output)?;
+        Ok(())
+    }
+}
+
+impl XdrDecode for wrapper {
+    fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+        Ok(Self {
+            body: <optional_record as XdrDecode>::decode_xdr(input)?,
+        })
+    }
+}
+
+impl onc_rpc_xdr::XdrEncodeSegments for wrapper {
+    fn encode_xdr_segments(&self, output: &mut onc_rpc_xdr::SegmentEncoder) -> Result<(), onc_rpc_xdr::XdrError> {
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.body, output)?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum response {
+    True {
+        value: wrapper,
+    },
+    False,
+}
+
+impl XdrEncode for response {
+    fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {
+        match self {
+            Self::True { value } => {
+                (true).encode_xdr(output)?;
+                value.encode_xdr(output)?;
+                Ok(())
+            }
+            Self::False => {
+                (false).encode_xdr(output)?;
+                Ok(())
+            }
+        }
+    }
+}
+
+impl XdrDecode for response {
+    fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+        let discriminant = <bool as XdrDecode>::decode_xdr(input)?;
+        match discriminant {
+            true => Ok(Self::True { value: <wrapper as XdrDecode>::decode_xdr(input)? }),
+            false => Ok(Self::False),
+        }
+    }
+}
+
+impl onc_rpc_xdr::XdrEncodeSegments for response {
+    fn encode_xdr_segments(&self, output: &mut onc_rpc_xdr::SegmentEncoder) -> Result<(), onc_rpc_xdr::XdrError> {
+        match self {
+            Self::True { value } => {
+                output.encode(&(true))?;
+                onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&value, output)?;
+                Ok(())
+            }
+            Self::False => {
+                output.encode(&(false))?;
+                Ok(())
+            }
+        }
+    }
+}
+
+/// Metadata-only projection; the terminal opaque body remains in caller storage.
+pub type dataMetadata = onc_rpc_xdr::OpaqueLength<{ BODY_MAX as usize }>;
+
+/// Metadata-only projection; the terminal opaque body remains in caller storage.
+pub type aliasMetadata = dataMetadata;
+
+/// Metadata-only projection; the terminal opaque body remains in caller storage.
+#[derive(Debug, Clone, PartialEq)]
+pub struct recordMetadata {
+    pub ratio: f32,
+    pub value: aliasMetadata,
+}
+
+impl XdrDecode for recordMetadata {
+    fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+        Ok(Self {
+            ratio: <f32 as XdrDecode>::decode_xdr(input)?,
+            value: <aliasMetadata as XdrDecode>::decode_xdr(input)?,
+        })
+    }
+}
+
+impl onc_rpc_xdr::XdrReplyMetadata for recordMetadata {
+    const MAX_PREFIX_BYTES: usize = 8;
+    fn opaque_len(&self) -> Option<usize> { onc_rpc_xdr::XdrReplyMetadata::opaque_len(&self.value) }
+}
+
+/// Metadata-only projection; the terminal opaque body remains in caller storage.
+pub type optional_recordMetadata = Option<Box<recordMetadata>>;
+
+/// Metadata-only projection; the terminal opaque body remains in caller storage.
+#[derive(Debug, Clone, PartialEq)]
+pub struct wrapperMetadata {
+    pub body: optional_recordMetadata,
+}
+
+impl XdrDecode for wrapperMetadata {
+    fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+        Ok(Self {
+            body: <optional_recordMetadata as XdrDecode>::decode_xdr(input)?,
+        })
+    }
+}
+
+impl onc_rpc_xdr::XdrReplyMetadata for wrapperMetadata {
+    const MAX_PREFIX_BYTES: usize = 12;
+    fn opaque_len(&self) -> Option<usize> { onc_rpc_xdr::XdrReplyMetadata::opaque_len(&self.body) }
+}
+
+/// Metadata-only projection; the terminal opaque body remains in caller storage.
+#[derive(Debug, Clone, PartialEq)]
+pub enum responseMetadata {
+    True {
+        value: wrapperMetadata,
+    },
+    False,
+}
+
+impl XdrDecode for responseMetadata {
+    fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+        let discriminant = <bool as XdrDecode>::decode_xdr(input)?;
+        match discriminant {
+            true => Ok(Self::True { value: <wrapperMetadata as XdrDecode>::decode_xdr(input)? }),
+            false => Ok(Self::False),
+        }
+    }
+}
+
+impl onc_rpc_xdr::XdrReplyMetadata for responseMetadata {
+    const MAX_PREFIX_BYTES: usize = 16;
+    fn opaque_len(&self) -> Option<usize> { match self { Self::True { value } => onc_rpc_xdr::XdrReplyMetadata::opaque_len(value), Self::False => None, } }
+}
+
+/// Alternate argument representation retaining multiple owners for one terminal opaque body.
+pub type dataSegments = onc_rpc_xdr::OpaqueSegments<{ BODY_MAX as usize }>;
+
+/// Alternate argument representation retaining multiple owners for one terminal opaque body.
+pub type aliasSegments = dataSegments;
+
+/// Alternate argument representation retaining multiple owners for one terminal opaque body.
+#[derive(Debug, Clone, PartialEq)]
+pub struct recordSegments {
+    pub ratio: f32,
+    pub value: aliasSegments,
+}
+
+impl XdrEncode for recordSegments {
+    fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {
+        self.ratio.encode_xdr(output)?;
+        self.value.encode_xdr(output)?;
+        Ok(())
+    }
+}
+
+impl XdrDecode for recordSegments {
+    fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+        Ok(Self {
+            ratio: <f32 as XdrDecode>::decode_xdr(input)?,
+            value: <aliasSegments as XdrDecode>::decode_xdr(input)?,
+        })
+    }
+}
+
+impl onc_rpc_xdr::XdrEncodeSegments for recordSegments {
+    fn encode_xdr_segments(&self, output: &mut onc_rpc_xdr::SegmentEncoder) -> Result<(), onc_rpc_xdr::XdrError> {
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.ratio, output)?;
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.value, output)?;
+        Ok(())
+    }
+}
+
+impl From<record> for recordSegments {
+    fn from(value: record) -> Self { Self {
+        ratio: value.ratio,
+        value: value.value.into(),
+    } }
+}
+
+/// Alternate argument representation retaining multiple owners for one terminal opaque body.
+pub type optional_recordSegments = Option<Box<recordSegments>>;
+
+/// Alternate argument representation retaining multiple owners for one terminal opaque body.
+#[derive(Debug, Clone, PartialEq)]
+pub struct wrapperSegments {
+    pub body: optional_recordSegments,
+}
+
+impl XdrEncode for wrapperSegments {
+    fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {
+        self.body.encode_xdr(output)?;
+        Ok(())
+    }
+}
+
+impl XdrDecode for wrapperSegments {
+    fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+        Ok(Self {
+            body: <optional_recordSegments as XdrDecode>::decode_xdr(input)?,
+        })
+    }
+}
+
+impl onc_rpc_xdr::XdrEncodeSegments for wrapperSegments {
+    fn encode_xdr_segments(&self, output: &mut onc_rpc_xdr::SegmentEncoder) -> Result<(), onc_rpc_xdr::XdrError> {
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.body, output)?;
+        Ok(())
+    }
+}
+
+impl From<wrapper> for wrapperSegments {
+    fn from(value: wrapper) -> Self { Self {
+        body: value.body.map(|value| Box::new((*value).into())),
+    } }
+}
+
+/// Alternate argument representation retaining multiple owners for one terminal opaque body.
+#[derive(Debug, Clone, PartialEq)]
+pub enum responseSegments {
+    True {
+        value: wrapperSegments,
+    },
+    False,
+}
+
+impl XdrEncode for responseSegments {
+    fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {
+        match self {
+            Self::True { value } => {
+                (true).encode_xdr(output)?;
+                value.encode_xdr(output)?;
+                Ok(())
+            }
+            Self::False => {
+                (false).encode_xdr(output)?;
+                Ok(())
+            }
+        }
+    }
+}
+
+impl XdrDecode for responseSegments {
+    fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+        let discriminant = <bool as XdrDecode>::decode_xdr(input)?;
+        match discriminant {
+            true => Ok(Self::True { value: <wrapperSegments as XdrDecode>::decode_xdr(input)? }),
+            false => Ok(Self::False),
+        }
+    }
+}
+
+impl onc_rpc_xdr::XdrEncodeSegments for responseSegments {
+    fn encode_xdr_segments(&self, output: &mut onc_rpc_xdr::SegmentEncoder) -> Result<(), onc_rpc_xdr::XdrError> {
+        match self {
+            Self::True { value } => {
+                output.encode(&(true))?;
+                onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&value, output)?;
+                Ok(())
+            }
+            Self::False => {
+                output.encode(&(false))?;
+                Ok(())
+            }
+        }
+    }
+}
+
+impl From<response> for responseSegments {
+    fn from(value: response) -> Self { match value {
+        response::True { value } => Self::True { value: value.into() },
+        response::False => Self::False,
+    } }
+}

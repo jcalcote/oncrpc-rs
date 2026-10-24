@@ -132,7 +132,7 @@ By default this means:
 - synchronous and asynchronous server traits and dispatch glue
 
 Generated client stubs also include `_with_options(...)` variants for
-request-level timeout and auth overrides.
+request-level timeout, authentication and cancellation options.
 
 If the input schema pulls in additional `.x` files through includes, generation
 should emit the reachable sibling Rust type modules needed to represent those
@@ -345,7 +345,7 @@ pub async fn proc_with_options(
 ) -> Result<Ret, RuntimeError>;
 ```
 
-Generated client methods must marshal arguments and replies through
+Ordinary generated client methods marshal arguments and replies through
 `onc_rpc_xdr::XdrEncode` and `onc_rpc_xdr::XdrDecode`.
 
 Generated options-bearing methods currently expose
@@ -358,6 +358,14 @@ Generated options-bearing methods currently expose
 This keeps simple methods short while allowing request-level timeout policy to
 inherit the client default, disable the timeout for a specific call, or apply
 an explicit override.
+
+In 0.3, `CallOptions::with_cancellation(token)` also carries a per-call
+`CallCancellation` token. Existing `_with_options` methods and the options
+argument on caller-owned methods forward it to the runtime. The generator does
+not add redundant cancellation-specific methods. Use `CallOptions` builders;
+the options type and `RuntimeError` are non-exhaustive. The
+[migration guide](migration.md) documents error matching, custom transport
+support and the distinction between local cancellation and remote execution.
 
 The intended direction is:
 
@@ -411,6 +419,59 @@ pub mod async_client {
     }
 }
 ```
+
+## Generated Caller-Owned Client API
+
+The additive caller-owned methods are emitted in each asynchronous client for
+`OwnedRpcTransport`. Existing synchronous and asynchronous methods retain their
+signatures and representations.
+
+- `proc_into(argument, buffer, options)` returns
+  `TypedReceiveOutcome<ReplyMetadata, B>`. The generated metadata projection
+  includes status/error unions, control fields and an `OpaqueLength` for the
+  terminal body. The leading `payload_len` bytes of the original buffer contain
+  that body, excluding XDR padding. An error arm with no body reports zero bytes.
+- `proc_segmented(argument, reply_buffer, options)` returns
+  `TypedReceiveOutcome<Reply, B>`. Its request encoding retains immutable opaque
+  owners as segments; its ordinary typed reply is decoded from the supplied
+  storage, whose length limits received XDR bytes.
+- `try_proc_into` and `try_proc_segmented` admit immediately and return owned
+  futures. Refusal returns the typed request and original buffer in `CallRefusal`,
+  including on encoding or XID-allocation failure. The caller decides when to
+  retry through the same generated method; no application XDR logic is needed.
+
+`B` implements `AsMut<[u8]> + Send + 'static`. Every completed outcome returns
+that original owner after the last library access, including on transport,
+RPC, decode, cancellation, deadline and admission failures. To cancel and
+recover the buffer, cancel the token and await the owned outcome. Dropping the
+future abandons that return. A fully sent call detaches its destination after
+the reader's last access and drains late data without closing a healthy shared
+connection. A partial outbound frame follows the runtime's distinct
+[cancellation and hard write-timeout rules](owned-buffers.md#limits-and-failure).
+
+Receive projections support one terminal variable opaque body through named
+structs, typedefs and finite unions, including body-free error arms. The control
+prefix must have a statically calculable maximum: scalar values, fixed arrays,
+structs, optional values and finite unions. Recursive or variable-sized control
+layouts do not receive an `*_into` capability. No handwritten protocol fallback
+is generated. `MAX_PREFIX_BYTES` bounds the receiver's control scratch; declared
+opaque bounds and destination capacity are checked before exposing data storage.
+
+Segmented encoding is generated separately from the original `XdrEncode` path.
+For a named argument ending in a variable opaque body, `ArgumentSegments`
+provides the same typed control fields and an `OpaqueSegments` body. It retains
+several `Bytes` values under one checked combined length and one final padding
+sequence. Its generated method also accepts the ordinary argument through
+`Into<ArgumentSegments>`. This preserves both the single-buffer convenience and
+scatter/gather for independently owned source regions.
+
+For example, standard NFSv3 `READ3resMetadata` preserves the result status,
+optional attributes, count and EOF. `WRITE3argsSegments` retains file handle,
+offset, count and stability while allowing several owners in its `data` field.
+Protocol-specific semantic checks, such as agreement between NFS count and data
+length, remain the consumer's responsibility. The fixture comes from
+[RFC 1813](https://www.rfc-editor.org/rfc/rfc1813.html), rather than a private
+consumer schema.
 
 ## Generated Server API
 

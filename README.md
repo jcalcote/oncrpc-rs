@@ -59,7 +59,7 @@ The workspace now includes:
 - generated Rust XDR types with `XdrEncode` / `XdrDecode` impls
 - per-file `.x` module generation with include-aware loading
 - typed synchronous and asynchronous client/server stub generation
-- request-level call options with per-call timeout and auth override support
+- request-level call options with per-call timeout, authentication and cancellation support
 - optional synchronous and asynchronous `rpcbind` v4
   lookup/register/unregister support for TCP/TCP6 and UDP/UDP6 mappings
 - optional direct TLS and STARTTLS client/server transports on top of the
@@ -71,6 +71,10 @@ and broader runtime features beyond the current typed sync/async generation
 contract.
 
 See [docs/architecture.md](docs/architecture.md) for the current crate-boundary and code-generation direction.
+See [docs/owned-buffers.md](docs/owned-buffers.md) for the 0.3 caller-owned
+receive and segmented-send API and ownership rules.
+See [the migration guide](docs/migration.md) for explicit cancellation,
+changed deadline behavior, and the `CallOptions`/`RuntimeError` source changes.
 See [docs/codegen.md](docs/codegen.md) for fixture layout, output policy, and generator testing expectations.
 
 ## Minimal Example
@@ -149,7 +153,22 @@ generated client stubs also expose `_with_options(...)` variants that take
 `onc_rpc_runtime::CallOptions`.
 
 Those options can also override per-call authentication policy, including
-explicit `AUTH_NONE` and `AUTH_SYS` credentials/verifiers.
+explicit `AUTH_NONE` and `AUTH_SYS` credentials/verifiers. In 0.3 they carry an
+optional `CallCancellation` token, so ordinary and generated calls share the same
+cancellation interface:
+
+```rust
+let cancellation = onc_rpc_runtime::CallCancellation::new();
+let options = onc_rpc_runtime::CallOptions::new()
+    .with_cancellation(cancellation.clone());
+let call = stub.get_time_with_options(&options);
+// Another task holding a clone can call cancellation.cancel().
+let result = call.await;
+```
+
+Use builders rather than constructing `CallOptions` with a struct literal.
+See [migration examples](docs/migration.md) for caller-owned buffers and
+custom transport implementations.
 
 ## TLS and STARTTLS
 
@@ -179,6 +198,65 @@ standard RPC TCP port.
 This TLS support currently applies to the TCP transport path. DTLS is not part
 of the current implementation.
 
+## Caller-owned buffers
+
+The 0.3 API offers `OwnedRpcTransport::call_into` for result receivers
+that parse small application headers and then select caller-owned data slices.
+`ReceiveOutcome` returns the original receiver after the final library access,
+on success or failure. `call_segmented` is the fixed-segment convenience API.
+
+The generator also emits typed caller-owned methods: `*_into` receives a
+terminal opaque result directly into supplied storage; `*_segmented` retains
+opaque request owners and uses supplied storage for the ordinary typed reply.
+Their `try_*` variants perform immediate admission. Generated metadata types
+preserve the protocol's status unions and control fields; no application-written
+XDR receiver is needed. See [the generated API contract](docs/cli-spec.md#generated-caller-owned-client-api)
+for supported layouts and multi-owner opaque arguments.
+
+The [owned-buffer example](examples/owned-buffers/buffer_echo.x) follows the
+time-service example: separate TCP programs share an `.x` protocol and generated
+interfaces. Start the [server](examples/owned-buffers/src/bin/buffer-server.rs):
+
+```bash
+cargo run -p owned-buffers-example --bin buffer-server
+```
+
+In another terminal, run the [client](examples/owned-buffers/src/bin/buffer-client.rs):
+
+```bash
+cargo run -p owned-buffers-example --bin buffer-client -- 127.0.0.1:4001 hello
+```
+
+The optional message accepts up to 64 UTF-8 bytes. The generated client sends
+retained segments, receives into the original data allocation, handles admission
+refusal and retries the returned owners after capacity becomes available.
+Congestion never closes the connection automatically. Existing constructors
+retain admission without configured ceilings; explicit limited constructors
+apply the shared budget to legacy and caller-owned calls alike. See
+[the ownership contract](docs/owned-buffers.md) for cancellation, deadlines,
+migration and ordinary kernel/TLS copy boundaries.
+
+### Connection closure and cancellation
+
+Use `CallCancellation` through `CallOptions` to cancel one call. Await its
+outcome to recover caller-owned storage after the last library access. A
+fully sent TCP call detaches its receive destination and drains any late reply
+without closing the shared connection. Dropping the future abandons its result
+and ownership return; explicit cancellation followed by awaiting the outcome is
+the recovery path.
+
+Once a request frame has started, explicit cancellation or a call deadline lets
+the writer finish that frame before releasing its owners. A hard write timeout,
+I/O failure or dropped future during a partial write can retire the connection.
+Set a write timeout when cleanup must have a finite bound.
+
+`close()` marks the entire connection terminal and affects every pending call.
+`wait_closed()` observes terminal state, not completion of buffer cleanup. The
+owned outcome is the per-operation cleanup boundary. See the
+[connection lifecycle contract](docs/owned-buffers.md#limits-and-failure) and
+[migration guide](docs/migration.md) for deadline, cancellation and
+custom transport behavior.
+
 ## Third-Party Dependencies
 
 Current Rust dependencies are intentionally small:
@@ -186,6 +264,7 @@ Current Rust dependencies are intentionally small:
 - [`async-trait`](https://docs.rs/async-trait/latest/async_trait/): ergonomic async trait bridge for generated server APIs
 - [`tokio`](https://docs.rs/tokio/latest/tokio/): async runtime and networking primitives
 - [`bytes`](https://docs.rs/bytes/latest/bytes/): efficient byte buffer handling
+- [`pin-project-lite`](https://docs.rs/pin-project-lite/latest/pin_project_lite/): safe pin projection without duplicated call futures
 - [`clap`](https://docs.rs/clap/latest/clap/): command-line parsing for `oncrpcgen`
 - [`thiserror`](https://docs.rs/thiserror/latest/thiserror/): error definitions
 - [`tracing`](https://docs.rs/tracing/latest/tracing/): structured instrumentation hooks
@@ -209,6 +288,12 @@ push to `main`:
 - `cargo clippy --workspace --all-targets -- -D warnings`
 - `cargo test --workspace`
 - `cargo check --workspace`
+- separate owned-buffer client/server smoke tests and warning-free API documentation
+
+A separate minimum-Rust job checks the library workspace, runtime contract tests
+and client/server smoke tests on Rust 1.85.0. Full workspace tests use current stable
+Rust because certificate-generation test dependencies can require a newer
+compiler than the libraries themselves.
 
 Tag pushes matching `v*` trigger a release workflow that:
 
@@ -219,8 +304,8 @@ Tag pushes matching `v*` trigger a release workflow that:
 - optionally publishes the crates to `crates.io` when a `CRATES_IO_TOKEN`
   repository secret is configured
 
-The example crate under `examples/time-service/` is intentionally excluded from
-publication.
+The example crates under `examples/time-service/` and `examples/owned-buffers/`
+are intentionally excluded from publication.
 
 ## Development
 

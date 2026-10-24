@@ -55,23 +55,29 @@ async fn poll_pending<F: Future>(future: std::pin::Pin<&mut F>) {
 }
 
 #[tokio::test(start_paused = true)]
-async fn entire_call_timeout_retires_partial_write_and_removes_xid() {
+async fn entire_call_timeout_finishes_partial_frame_before_reusing_connection() {
     let (client, mut peer) = duplex(1);
     let transport = test_transport(client, Some(Duration::from_secs(5)), None);
     let mut call = Box::pin(transport.call(request(1)));
     poll_pending(call.as_mut()).await;
-    assert_eq!(transport.state.replies().pending.len(), 1);
-    // One byte fits: the frame write has started and cannot complete.
     assert!(transport.state.writer.try_lock().is_err());
     tokio::time::advance(Duration::from_secs(5)).await;
-    let error = call.await.unwrap_err();
-    assert!(error.to_string().contains("call timeout"));
-    assert!(transport.state.replies().pending.is_empty());
-    assert!(transport.state.replies().closed.is_some());
-    let mut remainder = Vec::new();
-    peer.read_to_end(&mut remainder).await.unwrap();
-    assert_eq!(remainder.len(), 1);
-    assert!(transport.call(request(2)).await.is_err());
+    poll_pending(call.as_mut()).await;
+    assert!(!transport.is_closed());
+    let peer_task = tokio::spawn(async move {
+        assert_eq!(read_rpc_message(&mut peer).await.unwrap().xid, Xid(1));
+        assert_eq!(read_rpc_message(&mut peer).await.unwrap().xid, Xid(2));
+        write_rpc_message(&mut peer, &response(2)).await.unwrap();
+    });
+    assert_eq!(
+        call.await,
+        Err(RuntimeError::CallTimeout {
+            duration: Duration::from_secs(5)
+        })
+    );
+    assert!(!transport.is_closed());
+    assert_eq!(transport.call(request(2)).await.unwrap().xid, Xid(2));
+    peer_task.await.unwrap();
 }
 
 #[tokio::test(start_paused = true)]
@@ -313,4 +319,62 @@ async fn custom_record_limits_fail_before_accepting_oversized_payload() {
         .await
         .is_err()
     );
+}
+
+#[tokio::test]
+async fn pending_sender_waker_can_reenter_connection_cleanup_without_registry_lock() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    struct Reentrant {
+        state: Weak<State>,
+        unlocked: AtomicBool,
+    }
+    impl std::task::Wake for Reentrant {
+        fn wake(self: Arc<Self>) {
+            self.wake_by_ref();
+        }
+        fn wake_by_ref(self: &Arc<Self>) {
+            let state = self.state.upgrade().unwrap();
+            let unlocked = state.replies.try_lock().is_ok();
+            self.unlocked.store(unlocked, Ordering::SeqCst);
+            if unlocked {
+                state.fail(RuntimeError::ConnectionClosed);
+            }
+        }
+    }
+    let (stream, _peer) = duplex(128);
+    let transport = test_transport(stream, None, None);
+    let token = Arc::new(CallControl::default());
+    let permit = Arc::new(transport.state.admission.try_acquire(128).unwrap());
+    let (sender, receiver) = oneshot::channel();
+    transport.state.replies().pending.insert(
+        Xid(99),
+        Pending {
+            token: token.clone(),
+            sender: Some(ResponseSender::Buffered { sender, permit }),
+        },
+    );
+    let pending = PendingCall {
+        state: transport.state.clone(),
+        xid: Xid(99),
+        token,
+    };
+    let signal = Arc::new(Reentrant {
+        state: Arc::downgrade(&transport.state),
+        unlocked: AtomicBool::new(false),
+    });
+    let waker = std::task::Waker::from(signal.clone());
+    let mut context = std::task::Context::from_waker(&waker);
+    let mut receiver = Box::pin(receiver);
+    assert!(receiver.as_mut().poll(&mut context).is_pending());
+    drop(pending);
+    assert!(
+        signal.unlocked.load(Ordering::SeqCst),
+        "sender destruction invoked a waker under the reply registry lock"
+    );
+    assert!(
+        transport.is_closed(),
+        "the waker reentered connection cleanup"
+    );
+    assert_eq!(receiver.await.unwrap(), Err(RuntimeError::Cancelled));
+    assert_eq!(transport.admission_snapshot().calls, 0);
 }

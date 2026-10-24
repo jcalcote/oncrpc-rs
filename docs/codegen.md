@@ -8,14 +8,22 @@
 - Rust XDR serialization and deserialization implementations
 - ONC RPC program/version/procedure constants
 - client stubs, including `_with_options(...)` variants for request-level call
-  policy such as timeout and auth overrides
+  policy such as timeout, authentication and cancellation
 - server traits and dispatch glue
+- additive caller-owned client methods, metadata projections and segmented
+  encoders, as specified in [the generated API contract](cli-spec.md#generated-caller-owned-client-api)
 
 This document narrows the operational contract for generator work so future
 changes stay aligned.
 
 The intended `oncrpcgen` command-line surface and generated sync/async API
 shape are specified in [cli-spec.md](cli-spec.md).
+
+Call cancellation is carried by `CallOptions` on existing options-aware methods.
+Generated ordinary and caller-owned clients forward those options; they do not
+need cancellation-specific method variants. See
+[Migration guide](migration.md) for the new options/error source constraints
+and local completion semantics.
 
 ## Source of Truth
 
@@ -54,6 +62,11 @@ Generator work must follow one of these models explicitly:
 
 For now, the project should assume snapshot-verified outputs plus behavioral
 tests, not wholesale checked-in generated trees.
+
+Generated RPC methods include one or two Rustdoc lines describing their purpose
+and relevant options, buffer placement or admission behavior. Keep these summaries
+short; the runtime documentation owns the full lifecycle contract. Server methods
+identify the handler and its request context.
 
 ## Naming and Module Policy
 
@@ -112,6 +125,6 @@ The first compatibility bar should be the active `.x` files used by current
 consumers. As the project grows, add broader fixtures only after preserving
 that baseline.
 
-When running the real-corpus generator test outside a workstation that has a
-checked-out sibling `datasphere` repo, set `ONC_RPCGEN_REAL_XDR_DIR` to point
-at the external `.x` corpus explicitly.
+The optional external-corpus generator test accepts any consumer-provided `.x`
+corpus. Set `ONC_RPCGEN_REAL_XDR_DIR` to its directory. The committed fixtures and
+ordinary CI do not require an external repository.

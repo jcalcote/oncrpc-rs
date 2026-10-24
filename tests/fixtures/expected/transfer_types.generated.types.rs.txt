@@ -22,6 +22,13 @@ impl XdrDecode for instance_info_t {
     }
 }
 
+impl onc_rpc_xdr::XdrEncodeSegments for instance_info_t {
+    fn encode_xdr_segments(&self, output: &mut onc_rpc_xdr::SegmentEncoder) -> Result<(), onc_rpc_xdr::XdrError> {
+        output.opaque(&self.source_handle, Some(crate::nfs_support::REMOTE_HANDLE_SIZE as usize))?;
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct job_result_t {
     pub status: crate::common_types::status_code_t,
@@ -42,3 +49,62 @@ impl XdrDecode for job_result_t {
     }
 }
 
+impl onc_rpc_xdr::XdrEncodeSegments for job_result_t {
+    fn encode_xdr_segments(&self, output: &mut onc_rpc_xdr::SegmentEncoder) -> Result<(), onc_rpc_xdr::XdrError> {
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.status, output)?;
+        Ok(())
+    }
+}
+
+/// Metadata-only projection; the terminal opaque body remains in caller storage.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct instance_info_tMetadata {
+    pub source_handle: crate::nfs_support::remote_handle_tMetadata,
+}
+
+impl XdrDecode for instance_info_tMetadata {
+    fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+        Ok(Self {
+            source_handle: <crate::nfs_support::remote_handle_tMetadata as XdrDecode>::decode_xdr(input)?,
+        })
+    }
+}
+
+impl onc_rpc_xdr::XdrReplyMetadata for instance_info_tMetadata {
+    const MAX_PREFIX_BYTES: usize = 4;
+    fn opaque_len(&self) -> Option<usize> { onc_rpc_xdr::XdrReplyMetadata::opaque_len(&self.source_handle) }
+}
+
+/// Alternate argument representation retaining multiple owners for one terminal opaque body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct instance_info_tSegments {
+    pub source_handle: crate::nfs_support::remote_handle_tSegments,
+}
+
+impl XdrEncode for instance_info_tSegments {
+    fn encode_xdr(&self, output: &mut bytes::BytesMut) -> Result<(), onc_rpc_xdr::XdrError> {
+        self.source_handle.encode_xdr(output)?;
+        Ok(())
+    }
+}
+
+impl XdrDecode for instance_info_tSegments {
+    fn decode_xdr(input: &mut &[u8]) -> Result<Self, onc_rpc_xdr::XdrError> {
+        Ok(Self {
+            source_handle: <crate::nfs_support::remote_handle_tSegments as XdrDecode>::decode_xdr(input)?,
+        })
+    }
+}
+
+impl onc_rpc_xdr::XdrEncodeSegments for instance_info_tSegments {
+    fn encode_xdr_segments(&self, output: &mut onc_rpc_xdr::SegmentEncoder) -> Result<(), onc_rpc_xdr::XdrError> {
+        onc_rpc_xdr::XdrEncodeSegments::encode_xdr_segments(&self.source_handle, output)?;
+        Ok(())
+    }
+}
+
+impl From<instance_info_t> for instance_info_tSegments {
+    fn from(value: instance_info_t) -> Self { Self {
+        source_handle: value.source_handle.into(),
+    } }
+}

@@ -9,11 +9,12 @@ members = [
     "crates/onc-rpc-xdr",
     "crates/onc-rpc-gen",
     "examples/time-service",
+    "examples/owned-buffers",
 ]
 resolver = "2"
 
 [workspace.package]
-version = "0.2.2"
+version = "0.3.0"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/jcalcote/oncrpc-rs"
@@ -28,6 +29,7 @@ categories = ["network-programming"]
 async-trait = "0.1"
 bytes = "1.11"
 clap = { version = "4.5", features = ["derive"] }
+pin-project-lite = "0.2"
 rcgen = "0.14"
 rustls = "0.23"
 thiserror = "2.0"

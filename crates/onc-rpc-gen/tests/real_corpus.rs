@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use tempfile::TempDir;
 
-fn datasphere_xdr_dir() -> Option<PathBuf> {
+fn external_xdr_dir() -> Option<PathBuf> {
     if let Some(configured) = std::env::var_os("ONC_RPCGEN_REAL_XDR_DIR") {
         let path = PathBuf::from(configured);
         assert!(
@@ -18,8 +18,8 @@ fn datasphere_xdr_dir() -> Option<PathBuf> {
 }
 
 #[test]
-fn datasphere_corpus_generates_and_compiles_when_available() {
-    let Some(xdr_dir) = datasphere_xdr_dir() else {
+fn external_corpus_generates_and_compiles_when_available() {
+    let Some(xdr_dir) = external_xdr_dir() else {
         eprintln!(
             "skipping real corpus test; set ONC_RPCGEN_REAL_XDR_DIR to a readable .x corpus directory"
         );

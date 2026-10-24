@@ -1,0 +1,19 @@
+[package]
+name = "owned-buffers-example"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+bytes.workspace = true
+tokio.workspace = true
+onc-rpc-runtime = { version = "0.3.0", path = "../../crates/onc-rpc-runtime" }
+onc-rpc-wire = { version = "0.3.0", path = "../../crates/onc-rpc-wire" }
+onc-rpc-server = { version = "0.3.0", path = "../../crates/onc-rpc-server" }
+onc-rpc-xdr = { version = "0.3.0", path = "../../crates/onc-rpc-xdr" }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["process"] }

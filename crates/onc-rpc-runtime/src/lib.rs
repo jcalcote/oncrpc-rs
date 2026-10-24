@@ -1,8 +1,18 @@
 //! Minimal client-side ONC RPC contracts for generated stubs.
 
+mod admission;
+mod cancellation;
+pub use cancellation::CallCancellation;
 mod owned;
+mod record_io;
 mod transport;
-pub use owned::{OwnedRpcTransport, RecordLimits, read_rpc_message, read_rpc_message_with_limits};
+mod xdr_client;
+pub use admission::{AdmissionError, AdmissionLimits, AdmissionSnapshot};
+pub use owned::{
+    CallRefusal, OwnedRpcTransport, ReceiveOutcome, RecordLimits, ReplyReceiver, SegmentedReply,
+    SegmentedRequest, read_rpc_message, read_rpc_message_with_limits,
+};
+pub use xdr_client::{TypedReceiveOutcome, XdrDecodeReceiver, XdrReplyReceiver};
 
 pub use async_trait::async_trait;
 use bytes::{Buf, Bytes, BytesMut};
@@ -14,7 +24,10 @@ pub use onc_rpc_wire::{
 };
 use onc_rpc_xdr::{XdrDecode, XdrEncode};
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU32, Ordering},
+};
 use std::time::Duration;
 use thiserror::Error;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
@@ -143,15 +156,32 @@ pub enum CallTimeout {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct CallOptions {
+    /// Optional local cancellation shared with the caller.
+    pub cancellation: Option<CallCancellation>,
     pub timeout: CallTimeout,
     pub credentials: Option<OpaqueAuth>,
     pub verifier: Option<OpaqueAuth>,
 }
 
 impl CallOptions {
+    /// Attach local cancellation without implying that remote execution can stop.
+    pub fn with_cancellation(mut self, cancellation: CallCancellation) -> Self {
+        self.cancellation = Some(cancellation);
+        self
+    }
+
     pub fn new() -> Self {
         Self::default()
+    }
+
+    fn check_cancellation_support(&self) -> Result<(), RuntimeError> {
+        match &self.cancellation {
+            Some(token) if token.is_cancelled() => Err(RuntimeError::Cancelled),
+            Some(_) => Err(RuntimeError::UnsupportedCancellation),
+            None => Ok(()),
+        }
     }
 
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
@@ -199,32 +229,56 @@ impl CallOptions {
 }
 
 pub trait ClientTransport: Send + Sync + 'static {
+    /// Share one XID namespace across clients using the same physical transport.
+    /// Custom transports returning None use each client's private allocator.
+    fn xid_allocator(&self) -> Option<XidAllocator> {
+        None
+    }
+
     fn call(&self, request: RpcMessage) -> Result<RpcMessage, RuntimeError>;
 
     fn call_with_options(
         &self,
         request: RpcMessage,
-        _options: &CallOptions,
+        options: &CallOptions,
     ) -> Result<RpcMessage, RuntimeError> {
+        options.check_cancellation_support()?;
         self.call(request)
     }
 }
 
 #[async_trait]
 pub trait AsyncClientTransport: Send + Sync + 'static {
+    /// Share one XID namespace across clients using the same physical transport.
+    /// Wrappers should forward their underlying transport's allocator.
+    fn xid_allocator(&self) -> Option<XidAllocator> {
+        None
+    }
+
     async fn call(&self, request: RpcMessage) -> Result<RpcMessage, RuntimeError>;
 
     async fn call_with_options(
         &self,
         request: RpcMessage,
-        _options: &CallOptions,
+        options: &CallOptions,
     ) -> Result<RpcMessage, RuntimeError> {
+        options.check_cancellation_support()?;
         self.call(request).await
     }
 }
 
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum RuntimeError {
+    /// Local cancellation does not retract an RPC already sent to the server.
+    #[error("RPC call cancelled locally")]
+    Cancelled,
+    #[error("call timeout after {duration:?}")]
+    CallTimeout { duration: Duration },
+    #[error("write timeout after {duration:?}")]
+    WriteTimeout { duration: Duration },
+    #[error("transport does not implement per-call cancellation")]
+    UnsupportedCancellation,
     #[error("transport failure: {0}")]
     Transport(String),
     #[error("connection closed before a complete reply was received")]
@@ -258,7 +312,7 @@ pub enum RuntimeError {
 pub struct Client<T> {
     config: ClientConfig,
     transport: T,
-    next_xid: AtomicU32,
+    next_xid: XidAllocator,
 }
 
 /// Shared async client. Its XID allocator never wraps; exhaustion requires a
@@ -266,7 +320,28 @@ pub struct Client<T> {
 pub struct AsyncClient<T> {
     config: ClientConfig,
     transport: T,
-    next_xid: AtomicU32,
+    next_xid: XidAllocator,
+}
+
+/// A shared, monotonically increasing RPC transaction-ID namespace.
+///
+/// Built-in transports share one allocator across their clones and all attached
+/// clients. Raw callers mixing with typed clients must use that same allocator.
+/// IDs never wrap; exhaustion requires a new physical connection.
+#[derive(Clone, Debug)]
+pub struct XidAllocator(Arc<AtomicU32>);
+impl Default for XidAllocator {
+    fn default() -> Self {
+        Self(Arc::new(AtomicU32::new(1)))
+    }
+}
+impl XidAllocator {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    pub fn allocate(&self) -> Result<Xid, RuntimeError> {
+        allocate_xid(&self.0)
+    }
 }
 
 fn allocate_xid(counter: &AtomicU32) -> Result<Xid, RuntimeError> {
@@ -329,7 +404,7 @@ mod xid_exhaustion_tests {
             ClientConfig::new("127.0.0.1:1".parse().unwrap()),
             NeverCalled,
         );
-        client.next_xid.store(u32::MAX, Ordering::Relaxed);
+        client.next_xid.0.store(u32::MAX, Ordering::Relaxed);
         let request = CallRequest::new(
             ProgramVersion {
                 program: 12345,
@@ -349,10 +424,11 @@ where
     T: ClientTransport,
 {
     pub fn new(config: ClientConfig, transport: T) -> Self {
+        let next_xid = transport.xid_allocator().unwrap_or_default();
         Self {
             config,
             transport,
-            next_xid: AtomicU32::new(1),
+            next_xid,
         }
     }
 
@@ -369,7 +445,7 @@ where
         request: CallRequest,
         options: &CallOptions,
     ) -> Result<CallResponse, RuntimeError> {
-        let xid = allocate_xid(&self.next_xid)?;
+        let xid = self.next_xid.allocate()?;
         let wire_request = build_request_message_with_options(&self.config, xid, request, options);
         let reply = self.transport.call_with_options(wire_request, options)?;
         handle_reply(xid, reply)
@@ -411,10 +487,11 @@ where
     T: AsyncClientTransport,
 {
     pub fn new(config: ClientConfig, transport: T) -> Self {
+        let next_xid = transport.xid_allocator().unwrap_or_default();
         Self {
             config,
             transport,
-            next_xid: AtomicU32::new(1),
+            next_xid,
         }
     }
 
@@ -432,7 +509,7 @@ where
         request: CallRequest,
         options: &CallOptions,
     ) -> Result<CallResponse, RuntimeError> {
-        let xid = allocate_xid(&self.next_xid)?;
+        let xid = self.next_xid.allocate()?;
         let wire_request = build_request_message_with_options(&self.config, xid, request, options);
         let reply = self
             .transport
@@ -740,6 +817,7 @@ mod tests {
         assert_eq!(
             CallOptions::default(),
             CallOptions {
+                cancellation: None,
                 timeout: CallTimeout::Inherit,
                 credentials: None,
                 verifier: None,

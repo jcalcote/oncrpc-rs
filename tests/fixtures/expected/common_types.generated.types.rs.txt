@@ -8,3 +8,8 @@ pub type status_code_t = u32;
 
 pub type local_handle_t = Bytes;
 
+/// Metadata-only projection; the terminal opaque body remains in caller storage.
+pub type local_handle_tMetadata = onc_rpc_xdr::OpaqueLength<{ HANDLE_SIZE as usize }>;
+
+/// Alternate argument representation retaining multiple owners for one terminal opaque body.
+pub type local_handle_tSegments = onc_rpc_xdr::OpaqueSegments<{ HANDLE_SIZE as usize }>;
